@@ -1,0 +1,24 @@
+services:
+  - type: worker
+    name: top-gainers-bot
+    runtime: python
+    pythonVersion: "3.13"
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python main.py"
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        scope: runtime
+      - key: MONGODB_URL
+        scope: runtime
+      - key: BYBIT_HOSTNAME
+        value: "bybit.com"
+      - key: SPIKE_CHECK_INTERVAL
+        value: "60"
+      - key: MIN_SPIKE_THRESHOLD
+        value: "30"
+      - key: MAX_SPIKE_THRESHOLD
+        value: "70"
+      - key: EXCHANGES
+        value: "binance,bybit,mexc,bitget,gateio"
+      - key: ENVIRONMENT
+        value: "production"
