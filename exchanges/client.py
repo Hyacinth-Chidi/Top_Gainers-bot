@@ -14,6 +14,40 @@ class ExchangeClient:
         'gateio': ccxt.gateio,
     }
     
+    # Exchange-specific configurations
+    EXCHANGE_CONFIGS = {
+        'binance': {
+            'enableRateLimit': True,
+            'options': {
+                'defaultType': 'future',  # Binance uses 'future'
+            }
+        },
+        'bybit': {
+            'enableRateLimit': True,
+            'options': {
+                'defaultType': 'linear',  # Bybit uses 'linear' for USDT perpetuals
+            }
+        },
+        'mexc': {
+            'enableRateLimit': True,
+            'options': {
+                'defaultType': 'swap',
+            }
+        },
+        'bitget': {
+            'enableRateLimit': True,
+            'options': {
+                'defaultType': 'swap',
+            }
+        },
+        'gateio': {
+            'enableRateLimit': True,
+            'options': {
+                'defaultType': 'swap',
+            }
+        },
+    }
+    
     def __init__(self):
         self.exchanges = {}
         self._initialize_exchanges()
@@ -22,12 +56,8 @@ class ExchangeClient:
         """Initialize exchange connections"""
         for name, exchange_class in self.SUPPORTED_EXCHANGES.items():
             try:
-                exchange = exchange_class({
-                    'enableRateLimit': True,
-                    'options': {
-                        'defaultType': 'swap',  # Use swap/perpetual futures
-                    }
-                })
+                config = self.EXCHANGE_CONFIGS.get(name, {'enableRateLimit': True})
+                exchange = exchange_class(config)
                 self.exchanges[name] = exchange
                 print(f"✓ Connected to {name.upper()}")
             except Exception as e:
@@ -76,8 +106,13 @@ class ExchangeClient:
                         if not ticker or not isinstance(ticker, dict):
                             continue
                         
-                        # Check for USDT pairs
-                        if 'USDT' not in symbol or '/USDT' not in symbol:
+                        # Check for USDT pairs - handle both formats
+                        # Some exchanges use /USDT:USDT or /USDT
+                        if 'USDT' not in symbol:
+                            continue
+                        
+                        # Skip if not a trading pair
+                        if '/' not in symbol:
                             continue
                         
                         percent_change = ticker.get('percentage')
@@ -87,8 +122,11 @@ class ExchangeClient:
                             continue
                         
                         if percent_change > 0:
+                            # Clean up symbol - remove :USDT suffix if present
+                            clean_symbol = symbol.split(':')[0].replace('/', '')
+                            
                             gainers.append({
-                                'symbol': symbol.replace('/USDT', 'USDT'),
+                                'symbol': clean_symbol,
                                 'exchange': exchange_name,
                                 'price': ticker.get('last', 0) or 0,
                                 'change_24h': round(percent_change, 2),
@@ -111,6 +149,8 @@ class ExchangeClient:
                 else:
                     print(f"Error fetching data from {exchange_name}: {e}")
                     return []
+        
+        return []
     
     async def get_top_gainers_all_exchanges(self, limit: int = 10) -> List[Dict]:
         """
@@ -152,22 +192,28 @@ class ExchangeClient:
         exchange = self.exchanges[exchange_name]
         
         try:
-            ticker = await asyncio.to_thread(
-                exchange.fetch_ticker, 
-                symbol.replace('USDT', '/USDT')
-            )
+            # Try different symbol formats
+            for symbol_format in [symbol, f"{symbol.replace('USDT', '')}/USDT", f"{symbol}/USDT"]:
+                try:
+                    ticker = await asyncio.to_thread(
+                        exchange.fetch_ticker, 
+                        symbol_format
+                    )
+                    
+                    if ticker:
+                        return {
+                            'symbol': symbol,
+                            'exchange': exchange_name,
+                            'price': ticker.get('last', 0) or 0,
+                            'change_24h': ticker.get('percentage', 0) or 0,
+                            'volume_24h': ticker.get('quoteVolume', 0) or 0,
+                            'timestamp': datetime.utcnow()
+                        }
+                except:
+                    continue
             
-            if not ticker:
-                return None
+            return None
             
-            return {
-                'symbol': symbol,
-                'exchange': exchange_name,
-                'price': ticker.get('last', 0) or 0,
-                'change_24h': ticker.get('percentage', 0) or 0,
-                'volume_24h': ticker.get('quoteVolume', 0) or 0,
-                'timestamp': datetime.utcnow()
-            }
         except Exception as e:
             print(f"Error fetching {symbol} from {exchange_name}: {e}")
             return None
