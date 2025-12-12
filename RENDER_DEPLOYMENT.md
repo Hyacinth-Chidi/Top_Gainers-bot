@@ -39,8 +39,8 @@ Before deploying, add these environment variables in Render:
 
 | Key | Value | Type |
 |-----|-------|------|
-| `TELEGRAM_BOT_TOKEN` | Your bot token | Secret |
-| `MONGODB_URL` | Your MongoDB Atlas connection string | Secret |
+| `TELEGRAM_BOT_TOKEN` | Your bot token | **Secret** ⚠️ |
+| `MONGODB_URL` | Your MongoDB Atlas connection string | **Secret** ⚠️ |
 | `BYBIT_HOSTNAME` | `bybit.com` | Regular |
 | `SPIKE_CHECK_INTERVAL` | `60` | Regular |
 | `MIN_SPIKE_THRESHOLD` | `30` | Regular |
@@ -48,7 +48,9 @@ Before deploying, add these environment variables in Render:
 | `EXCHANGES` | `binance,bybit,mexc,bitget,gateio` | Regular |
 | `ENVIRONMENT` | `production` | Regular |
 
-**Important**: Mark `TELEGRAM_BOT_TOKEN` and `MONGODB_URL` as **Secret** so they're encrypted.
+**⚠️ IMPORTANT**: Mark `TELEGRAM_BOT_TOKEN` and `MONGODB_URL` as **Secret** so they're encrypted.
+- In the Render dashboard, you'll see a toggle for each variable - toggle it to "Secret" for sensitive values
+- Do NOT add secrets to `render.yaml` (they must be set manually in the dashboard)
 
 ### Step 5: Deploy
 1. Click the **Deploy** button
