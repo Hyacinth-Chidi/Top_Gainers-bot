@@ -21,6 +21,10 @@ class Config:
     # Exchanges
     EXCHANGES = os.getenv("EXCHANGES", "binance,bybit,mexc,bitget,gateio").split(",")
     
+    # Bybit regional endpoint
+    # Options: "bybit.com" (global), "bybit.us" (US), "bybit.eu" (EU)
+    BYBIT_HOSTNAME = os.getenv("BYBIT_HOSTNAME", "bybit.com")
+    
     # Environment
     ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
     IS_PRODUCTION = ENVIRONMENT == "production"

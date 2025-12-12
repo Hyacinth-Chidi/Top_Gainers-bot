@@ -2,6 +2,7 @@ import ccxt
 import asyncio
 from typing import List, Dict, Optional
 from datetime import datetime
+from config import config
 
 class ExchangeClient:
     """Unified client for fetching futures data from multiple exchanges"""
@@ -24,6 +25,7 @@ class ExchangeClient:
         },
         'bybit': {
             'enableRateLimit': True,
+            'hostname': config.BYBIT_HOSTNAME,  # Regional endpoint: bybit.com, bybit.us, bybit.eu
             'options': {
                 'defaultType': 'linear',  # Bybit uses 'linear' for USDT perpetuals
             }
