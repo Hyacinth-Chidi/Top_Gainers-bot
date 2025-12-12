@@ -2,7 +2,6 @@ services:
   - type: worker
     name: top-gainers-bot
     runtime: python
-    pythonVersion: "3.13"
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python main.py"
     envVars:
