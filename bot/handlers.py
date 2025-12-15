@@ -31,9 +31,6 @@ class BotHandlers:
             first_name=user.first_name
         )
         
-        # Create default preferences
-        await self.db.create_default_preferences(user.id)
-        
         await update.message.reply_text(
             self.messages.WELCOME,
             parse_mode=ParseMode.MARKDOWN,
@@ -49,6 +46,24 @@ class BotHandlers:
     
     async def gainers_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /gainers command - start the flow"""
+        user_id = update.effective_user.id
+        if user_id not in self.user_context:
+            self.user_context[user_id] = {}
+        self.user_context[user_id]['mode'] = 'gainers'
+        
+        await update.message.reply_text(
+            self.messages.SELECT_EXCHANGE,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=self.keyboards.exchange_selection()
+        )
+        
+    async def losers_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /losers command - start the flow"""
+        user_id = update.effective_user.id
+        if user_id not in self.user_context:
+            self.user_context[user_id] = {}
+        self.user_context[user_id]['mode'] = 'losers'
+        
         await update.message.reply_text(
             self.messages.SELECT_EXCHANGE,
             parse_mode=ParseMode.MARKDOWN,
@@ -96,6 +111,8 @@ class BotHandlers:
             await self._handle_alerts_toggle(query, user_id, data)
         elif data.startswith("menu:"):
             await self._handle_menu_selection(query, data)
+        elif data.startswith("toggle_exch:"):
+            await self._handle_exchange_filter_toggle(query, user_id, data)
     
     async def _handle_exchange_selection(self, query, user_id: int, data: str):
         """Handle exchange selection"""
@@ -117,20 +134,31 @@ class BotHandlers:
         """Handle count selection and fetch gainers"""
         count = int(data.split(":")[1])
         
-        # Get exchange from context
-        exchange = self.user_context.get(user_id, {}).get('exchange', 'all')
+        # Get exchange and mode from context
+        context_data = self.user_context.get(user_id, {})
+        exchange = context_data.get('exchange', 'all')
+        mode = context_data.get('mode', 'gainers') # Default to gainers
+        
+        action_text = "gainers" if mode == "gainers" else "losers"
+        title = "Gainers" if mode == "gainers" else "Losers"
         
         # Show loading message
-        await query.answer("Fetching gainers...")
+        await query.answer(f"Fetching {action_text}...")
         
-        # Fetch gainers
-        if exchange == 'all':
-            gainers = await self.exchange_client.get_top_gainers_all_exchanges(limit=count)
-        else:
-            gainers = await self.exchange_client.get_top_gainers(exchange, limit=count)
+        # Fetch data based on mode
+        if mode == 'gainers':
+            if exchange == 'all':
+                items = await self.exchange_client.get_top_gainers_all_exchanges(limit=count)
+            else:
+                items = await self.exchange_client.get_top_gainers(exchange, limit=count)
+        else: # losers
+            if exchange == 'all':
+                items = await self.exchange_client.get_top_losers_all_exchanges(limit=count)
+            else:
+                items = await self.exchange_client.get_top_losers(exchange, limit=count)
         
-        # Format and send results - SEND NEW MESSAGE instead of editing (keeps history)
-        message = self.messages.format_gainers_list(gainers, exchange, count)
+        # Format and send results
+        message = self.messages.format_gainers_list(items, exchange, count, title=title)
         
         await query.message.reply_text(
             message,
@@ -141,6 +169,28 @@ class BotHandlers:
         # Clean up context
         if user_id in self.user_context:
             del self.user_context[user_id]
+            
+    async def _handle_exchange_filter_toggle(self, query, user_id: int, data: str):
+        """Handle toggling of exchanges for alerts"""
+        target_exch = data.split(":")[1]
+        
+        # Get current preferences
+        prefs = await self.db.get_user_preferences(user_id)
+        current_exchanges = set(prefs.get('alert_exchanges', ["binance", "bybit", "mexc", "bitget", "gateio"]))
+        
+        # Toggle
+        if target_exch in current_exchanges:
+            current_exchanges.remove(target_exch)
+        else:
+            current_exchanges.add(target_exch)
+            
+        # Save
+        await self.db.update_user_alert_exchanges(user_id, list(current_exchanges))
+        
+        # Update keyboard
+        await query.edit_message_reply_markup(
+            reply_markup=self.keyboards.alerts_exchange_selection(current_exchanges)
+        )
     
     async def _handle_alerts_toggle(self, query, user_id: int, data: str):
         """Handle alerts enable/disable"""
@@ -172,6 +222,23 @@ class BotHandlers:
             )
         elif action == "gainers":
             await query.answer()
+            # Set context
+            if query.from_user.id not in self.user_context:
+                self.user_context[query.from_user.id] = {}
+            self.user_context[query.from_user.id]['mode'] = 'gainers'
+            
+            await query.message.reply_text(
+                self.messages.SELECT_EXCHANGE,
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=self.keyboards.exchange_selection()
+            )
+        elif action == "losers":
+            await query.answer()
+            # Set context
+            if query.from_user.id not in self.user_context:
+                self.user_context[query.from_user.id] = {}
+            self.user_context[query.from_user.id]['mode'] = 'losers'
+            
             await query.message.reply_text(
                 self.messages.SELECT_EXCHANGE,
                 parse_mode=ParseMode.MARKDOWN,
@@ -193,6 +260,22 @@ class BotHandlers:
                     parse_mode=ParseMode.MARKDOWN,
                     reply_markup=self.keyboards.alerts_toggle(alerts_enabled)
                 )
+        elif action == "filter_exchanges":
+            user_id = query.from_user.id
+            prefs = await self.db.get_user_preferences(user_id)
+            if not prefs:
+                await self.db.create_default_preferences(user_id)
+                prefs = await self.db.get_user_preferences(user_id)
+            
+            # Default to all if not set
+            current_exchanges = set(prefs.get('alert_exchanges', ["binance", "bybit", "mexc", "bitget", "gateio"]))
+            
+            await query.answer()
+            await query.message.reply_text(
+                "🛠️ **Filter Exchanges**\n\nSelect which exchanges you want to receive alerts from:",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=self.keyboards.alerts_exchange_selection(current_exchanges)
+            )
         elif action == "help":
             await query.answer()
             await query.message.reply_text(

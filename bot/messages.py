@@ -4,55 +4,53 @@ class BotMessages:
     """Message templates for the bot"""
     
     WELCOME = """
-👋 Welcome to **Top Gainers Bot**!
+👋 **Welcome to Top Gainers Bot!**
 
-I help you track the hottest futures/derivatives gainers across major exchanges.
+I track the crypto futures market to find the best trading opportunities for you. 🚀
 
-🎯 **Features:**
-• View top 5/10/20 gainers on any exchange
-• Real-time alerts for 30-70% spikes
-• Track Binance, Bybit, MEXC & Bitget
+🎯 **What I Do:**
+• 📈 **Gainers**: Top 5/10/20 winners 
+• 📉 **Losers**: Top 5/10/20 dippers (buy the dip!)
+• ⚡ **Spike Alerts**: Notification when price pumps 5% in 5 mins
+• 🛡️ **Exchange Filter**: You choose which exchanges to track
 
-📊 **Quick Start:**
-Use /gainers to see top performers
-Use /alerts to manage notifications
+📊 **Exchanges Supported:**
+🟡 Binance • 🔷 Bybit • 🟢 MEXC • 🔵 Bitget • 🟣 Gate.io
 
-Let's find those pumps! 🚀
+👇 **Click a button below to start:**
 """
     
     HELP = """
-🆘 **How to Use Top Gainers Bot**
+🆘 **Top Gainers Bot Help**
 
-**Commands:**
-/gainers - View top gainers by exchange
-/alerts - Enable/disable spike alerts
-/help - Show this help message
+I help you catch pumps and trade volatility on major futures exchanges.
 
-**How Alerts Work:**
-🚨 You'll be notified when any futures contract gains 30-70%+ suddenly
-📊 Alerts include: Symbol, Exchange, Price, % Gain
+✨ **Main Commands:**
+• /gainers - View top rising coins 📈
+• /losers - View top falling coins 📉
+• /alerts - Configure your notifications 🔔
 
-**Exchanges Tracked:**
-• Binance Futures
-• Bybit Derivatives
-• MEXC Futures
-• Bitget Futures
+⚡ **About Alerts:**
+I watch the market 24/7 and notify you when:
+1. **Volatility Spike**: A coin pumps >5% in 5 minutes 🚀
+2. **Daily Gainer**: A coin hits +30% to +70% on the day 🔥
 
-**Tips:**
-✓ Use filters to focus on specific exchanges
-✓ Enable alerts to never miss big moves
-✓ Check multiple times a day for best results
+🛠️ **Settings:**
+Use /alerts → "Filter Exchanges" to select only the exchanges you trade on.
 
-Questions? Feedback? Use the feedback button below any message.
+💡 **Pro Tip:**
+All alerts contain **Direct Trading Links**. Click the link to open the futures pair immediately!
+
+_Questions? Feedback? Contact the developer._
 """
     
     @staticmethod
-    def format_gainers_list(gainers: List[Dict], exchange: str, count: int) -> str:
-        """Format list of gainers into readable message"""
+    def format_gainers_list(gainers: List[Dict], exchange: str, count: int, title: str = "Gainers") -> str:
+        """Format list of coins into readable message"""
         if not gainers:
-            return f"❌ No gainers found on {exchange.upper()} right now."
+            return f"❌ No {title.lower()} found on {exchange.upper()} right now."
         
-        header = f"📈 **Top {count} Gainers"
+        header = f"**Top {count} {title}"
         if exchange != "all":
             header += f" - {exchange.upper()}**"
         else:
@@ -68,6 +66,7 @@ Questions? Feedback? Use the feedback button below any message.
             change = gainer['change_24h']
             volume = gainer['volume_24h']
             exch = gainer['exchange'].upper()
+            url = gainer.get('url', '')
             
             # Format volume in millions/billions
             if volume >= 1_000_000_000:
@@ -77,20 +76,27 @@ Questions? Feedback? Use the feedback button below any message.
             else:
                 vol_str = f"${volume/1_000:.2f}K"
             
+            # Format title line
             line = f"{emoji} **{symbol}** ({exch})\n"
             line += f"   💰 ${price:.4f}\n"
-            line += f"   📊 +{change}%\n"
+            
+            # Change color for gainers/losers if needed, but standard text is fine
+            sign = "+" if change > 0 else ""
+            line += f"   📊 {sign}{change}%\n"
             line += f"   📈 Vol: {vol_str}"
+            
+            if url:
+                line += f"\n   🔗 [Trade on {exch}]({url})"
             
             lines.append(line)
         
         lines.append("\n_Updated: Just now_")
-        lines.append("\n💡 Go to your preferred exchange to trade these coins!")
+        lines.append("\n💡 Click links to trade immediately!")
         
         return "\n".join(lines)
     
     @staticmethod
-    def format_spike_alert(symbol: str, exchange: str, price: float, change: float, volume: float) -> str:
+    def format_spike_alert(symbol: str, exchange: str, price: float, change: float, volume: float, url: str = "") -> str:
         """Format spike alert message"""
         # Format volume
         if volume >= 1_000_000_000:
@@ -108,9 +114,11 @@ Questions? Feedback? Use the feedback button below any message.
 💰 Price: ${price:.4f}
 📈 Gain: +{change:.2f}%
 📊 Volume: {vol_str}
-
-⚡ This coin just spiked! Check your exchange now!
 """
+        if url:
+            message += f"🔗 [Trade Now]({url})\n"
+            
+        message += "\n⚡ This coin just spiked! Check your exchange now!"
         return message.strip()
     
     ALERTS_ENABLED = """
@@ -129,7 +137,7 @@ You won't receive spike notifications anymore.
 You can re-enable them anytime with /alerts
 """
     
-    SELECT_EXCHANGE = "📊 **Select an exchange to view top gainers:**"
-    SELECT_COUNT = "🔢 **How many top gainers do you want to see?**"
+    SELECT_EXCHANGE = "🏦 **Select Exchange**\n\nWhich exchange data would you like to see?"
+    SELECT_COUNT = "🔢 **How many coins?**\n\nSelect the number of results to display:"
     
-    LOADING = "⏳ Fetching latest data from exchanges..."
+    LOADING = "⏳ **Fetching data...** Please wait."

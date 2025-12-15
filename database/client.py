@@ -94,7 +94,19 @@ class DatabaseClient:
     
     async def get_users_with_alerts_enabled(self) -> List[Dict]:
         """Get all users with alerts enabled"""
-        cursor = self.users.find({"alerts_enabled": True})
+        # Use aggregation to join with preferences
+        pipeline = [
+            {"$match": {"alerts_enabled": True}},
+            {"$lookup": {
+                "from": "user_preferences",
+                "localField": "id",
+                "foreignField": "user_id",
+                "as": "prefs"
+            }},
+            {"$unwind": {"path": "$prefs", "preserveNullAndEmptyArrays": True}}
+        ]
+        
+        cursor = self.users.aggregate(pipeline)
         return await cursor.to_list(length=None)
     
     # User preferences operations
@@ -106,7 +118,8 @@ class DatabaseClient:
         """Create default preferences for user"""
         default_prefs = {
             "user_id": user_id,
-            "preferred_exchanges": ["binance", "bybit", "mexc", "bitget"],
+            "preferred_exchanges": ["binance", "bybit", "mexc", "bitget", "gateio"],
+            "alert_exchanges": ["binance", "bybit", "mexc", "bitget", "gateio"],  # Enabled exchanges for alerts
             "default_top_count": 10,
             "min_alert_threshold": 30,
             "max_alert_threshold": 70
@@ -115,6 +128,14 @@ class DatabaseClient:
         await self.user_preferences.update_one(
             {"user_id": user_id},
             {"$setOnInsert": default_prefs},
+            upsert=True
+        )
+
+    async def update_user_alert_exchanges(self, user_id: int, exchanges: List[str]):
+        """Update the list of exchanges a user wants alerts from"""
+        await self.user_preferences.update_one(
+            {"user_id": user_id},
+            {"$set": {"alert_exchanges": exchanges}},
             upsert=True
         )
     

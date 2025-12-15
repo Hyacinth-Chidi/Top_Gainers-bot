@@ -63,17 +63,47 @@ class BotKeyboards:
                 )
             ],
             [
+                InlineKeyboardButton("🛠️ Filter Exchanges", callback_data="menu:filter_exchanges"),
+            ],
+            [
                 InlineKeyboardButton("🔙 Back to Menu", callback_data="menu:main"),
             ],
         ]
         return InlineKeyboardMarkup(keyboard)
     
     @staticmethod
+    def alerts_exchange_selection(enabled_exchanges: set):
+        """Keyboard for selecting exchanges to alert on"""
+        
+        def get_text(name, key):
+            is_enabled = key in enabled_exchanges
+            return f"{'✅' if is_enabled else '❌'} {name}"
+
+        keyboard = [
+            [
+                InlineKeyboardButton(get_text("Binance", "binance"), callback_data="toggle_exch:binance"),
+                InlineKeyboardButton(get_text("Bybit", "bybit"), callback_data="toggle_exch:bybit"),
+            ],
+            [
+                InlineKeyboardButton(get_text("MEXC", "mexc"), callback_data="toggle_exch:mexc"),
+                InlineKeyboardButton(get_text("Bitget", "bitget"), callback_data="toggle_exch:bitget"),
+            ],
+            [
+                InlineKeyboardButton(get_text("Gate.io", "gateio"), callback_data="toggle_exch:gateio"),
+            ],
+            [
+                InlineKeyboardButton("🔙 Done / Back", callback_data="menu:alerts"),
+            ],
+        ]
+        return InlineKeyboardMarkup(keyboard)
+
+    @staticmethod
     def main_menu():
         """Main menu keyboard"""
         keyboard = [
             [
-                InlineKeyboardButton("📈 View Gainers", callback_data="menu:gainers"),
+                InlineKeyboardButton("📈 Top Gainers", callback_data="menu:gainers"),
+                InlineKeyboardButton("📉 Top Losers", callback_data="menu:losers"),
             ],
             [
                 InlineKeyboardButton("🔔 Alert Settings", callback_data="menu:alerts"),

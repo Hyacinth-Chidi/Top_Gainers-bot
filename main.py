@@ -80,6 +80,7 @@ class TopGainersBot:
         self.application.add_handler(CommandHandler("start", handlers.start_command))
         self.application.add_handler(CommandHandler("help", handlers.help_command))
         self.application.add_handler(CommandHandler("gainers", handlers.gainers_command))
+        self.application.add_handler(CommandHandler("losers", handlers.losers_command))
         self.application.add_handler(CommandHandler("alerts", handlers.alerts_command))
         
         # Register callback query handler for buttons
@@ -106,4 +107,7 @@ def main():
         traceback.print_exc()
 
 if __name__ == "__main__":
+    import sys
+    if sys.platform == 'win32':
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     main()
