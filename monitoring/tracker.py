@@ -88,18 +88,29 @@ class SpikeTracker:
             daily_spike = config.MIN_SPIKE_THRESHOLD <= change_24h <= config.MAX_SPIKE_THRESHOLD
             
             if daily_spike or volatility_spike:
-                # Use a specific type for alert frequency check? 
-                # For now, share the simplified throttling (1h cool off)
+                # Calculate valid pump % if volatility triggered
+                # volatility_spike boolean doesn't carry the value. 
+                # Ideally _check_volatility returns value or None.
+                # Retrying _check_volatility logic inside alert or redefining it 
+                # for now let's just re-calculate or assume > 5%
                 
-                # If it's a volatility spike, we might want to alert even if change_24h is low
-                # The message format currently assumes "Gain" is change_24h. 
-                # We should pass the effective change if possible, but let's stick to 24h for consistency 
-                # or indicate it's a "Pump Alert".
-                # For simplicity, we use the same alert flow.
-                
+                # Check for rate limits
                 if await self._should_alert(cache_key, symbol, exchange, change_24h):
+                    
+                    # Decide alert type
+                    is_pump = volatility_spike
+                    # If both, treat as pump (more urgent)? Or 24h?
+                    # Let's say: if it's a pump, show pump alert.
+                    
+                    pump_change = 0.0
+                    if is_pump:
+                         # Get the actual change
+                         pump_change = self._get_volatility_change(cache_key, price, now)
+
                     await self._send_spike_alert(
-                        symbol, exchange, price, change_24h, volume
+                        symbol, exchange, price, change_24h, volume,
+                        is_pump=is_pump,
+                        pump_change=pump_change
                     )
                     
                     # Record this alert
@@ -148,6 +159,23 @@ class SpikeTracker:
                 
         return False
 
+    def _get_volatility_change(self, cache_key: str, current_price: float, current_time: datetime) -> float:
+        """Helper to get the actual % change for the message"""
+        history = self.price_history.get(cache_key, [])
+        if not history: return 0.0
+        
+        target_time = current_time - timedelta(minutes=self.VOLATILITY_WINDOW_MINUTES)
+        old_price = None
+        for p, t in history:
+            if t <= target_time:
+                 old_price = p
+            else:
+                if old_price: break
+        
+        if old_price and old_price > 0:
+            return ((current_price - old_price) / old_price) * 100
+        return 0.0
+
     def cleanup_old_history(self):
         """Remove history older than window + buffer"""
         cutoff = datetime.utcnow() - timedelta(minutes=self.VOLATILITY_WINDOW_MINUTES + 5)
@@ -180,7 +208,9 @@ class SpikeTracker:
         exchange: str, 
         price: float, 
         change: float, 
-        volume: float
+        volume: float,
+        is_pump: bool = False,
+        pump_change: float = 0.0
     ):
         """Send spike alert to all users with alerts enabled"""
         # Get all users with alerts enabled (includes preferences from lookup)
@@ -193,11 +223,16 @@ class SpikeTracker:
         url = self.exchange_client._generate_trade_link(exchange, symbol)
         
         # Format alert message
-        message = self.messages.format_spike_alert(
-            symbol, exchange, price, change, volume, url
-        )
-        
-        print(f"🚨 Sending spike alert: {symbol} on {exchange} (+{change}%)")
+        if is_pump:
+            message = self.messages.format_pump_alert(
+                symbol, exchange, price, pump_change, volume, url
+            )
+            print(f"🚀 Sending PUMP alert: {symbol} on {exchange} (+{pump_change:.2f}% in 5m)")
+        else:
+            message = self.messages.format_spike_alert(
+                symbol, exchange, price, change, volume, url
+            )
+            print(f"🚨 Sending spike alert: {symbol} on {exchange} (+{change}%)")
         
         # Send to valid users
         for user in users:

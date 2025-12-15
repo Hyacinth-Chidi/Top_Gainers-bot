@@ -120,6 +120,32 @@ _Questions? Feedback? Contact the developer._
             
         message += "\n⚡ This coin just spiked! Check your exchange now!"
         return message.strip()
+        
+    @staticmethod
+    def format_pump_alert(symbol: str, exchange: str, price: float, change_5m: float, volume: float, url: str = "") -> str:
+        """Format volatility pump alert message"""
+        # Format volume
+        if volume >= 1_000_000_000:
+            vol_str = f"${volume/1_000_000_000:.2f}B"
+        elif volume >= 1_000_000:
+            vol_str = f"${volume/1_000_000:.2f}M"
+        else:
+            vol_str = f"${volume/1_000:.2f}K"
+        
+        message = f"""
+🚀 **PUMP DETECTED!**
+
+🪙 **{symbol}**
+📍 Exchange: {exchange.upper()}
+💰 Price: ${price:.4f}
+⚡ **Move: +{change_5m:.2f}% (5m)**
+📊 Volume: {vol_str}
+"""
+        if url:
+            message += f"🔗 [Trade Now]({url})\n"
+            
+        message += "\n⚠️ High volatility alert! DYOR."
+        return message.strip()
     
     ALERTS_ENABLED = """
 ✅ **Alerts Enabled!**
