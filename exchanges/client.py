@@ -86,8 +86,13 @@ class ExchangeClient:
             
         exchange = self.exchanges[exchange_name]
         try:
+            # Prepare params
+            params = {}
+            if exchange_name == 'bybit':
+                params = {'category': 'linear'}
+
             tickers = await asyncio.wait_for(
-                asyncio.to_thread(exchange.fetch_tickers),
+                asyncio.to_thread(exchange.fetch_tickers, None, params),
                 timeout=30
             )
             
