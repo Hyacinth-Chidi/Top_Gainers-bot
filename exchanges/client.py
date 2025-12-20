@@ -91,6 +91,13 @@ class ExchangeClient:
             if exchange_name == 'bybit':
                 params = {'category': 'linear'}
 
+            # Load markets first to get status info
+            if not exchange.markets:
+                await asyncio.wait_for(
+                    asyncio.to_thread(exchange.load_markets),
+                    timeout=30
+                )
+
             tickers = await asyncio.wait_for(
                 asyncio.to_thread(exchange.fetch_tickers, None, params),
                 timeout=30
@@ -107,8 +114,25 @@ class ExchangeClient:
                     if 'USDT' not in symbol: continue
                     if '/' not in symbol: continue
                     
+                    # Check if market is active (filter out delisted/inactive pairs)
+                    market = exchange.markets.get(symbol)
+                    if market:
+                        # Skip inactive markets
+                        if not market.get('active', True):
+                            continue
+                        # Skip markets with specific inactive statuses
+                        info = market.get('info', {})
+                        status = info.get('status') or info.get('contractStatus')
+                        if status and status.upper() in ['BREAK', 'CLOSE', 'SETTLING', 'PENDING_TRADING']:
+                            continue
+                    
                     percent_change = ticker.get('percentage')
                     if percent_change is None: continue
+                    
+                    # Filter out pairs with zero/negligible volume (likely inactive)
+                    volume = ticker.get('quoteVolume', 0) or 0
+                    if volume < 1000:  # Less than $1000 volume = likely dead
+                        continue
                     
                     # Clean symbol
                     clean_symbol = symbol.split(':')[0].replace('/', '')
@@ -118,7 +142,7 @@ class ExchangeClient:
                         'exchange': exchange_name,
                         'price': ticker.get('last', 0) or 0,
                         'change_24h': round(percent_change, 2),
-                        'volume_24h': ticker.get('quoteVolume', 0) or 0,
+                        'volume_24h': volume,
                         'timestamp': datetime.utcnow(),
                         'url': self._generate_trade_link(exchange_name, clean_symbol)
                     })
