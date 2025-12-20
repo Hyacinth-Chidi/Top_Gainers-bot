@@ -20,7 +20,7 @@ class ExchangeClient:
         'binance': {
             'enableRateLimit': True,
             'options': {
-                'defaultType': 'future',  # Binance uses 'future'
+                'defaultType': 'swap',  # USDT-M Perpetuals (was 'future' which is Coin-M)
             }
         },
         'bybit': {
