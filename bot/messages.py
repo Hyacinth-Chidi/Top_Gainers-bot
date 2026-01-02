@@ -8,6 +8,9 @@ class BotMessages:
 
 I track the crypto futures market to find the best trading opportunities for you. 🚀
 
+🔔 **Important:** Alerts are **OFF** by default. 
+To start receiving real-time Pump & Dump alerts, click "🔔 Alerts" below and enable them!
+
 🎯 **What I Do:**
 • 📈 **Gainers**: Top 5/10/20 winners 
 • 📉 **Losers**: Top 5/10/20 dippers (buy the dip!)

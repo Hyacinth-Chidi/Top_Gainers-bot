@@ -482,6 +482,208 @@ Add containerization for easy deployment.
 
 ---
 
+## 💹 Real-Time & Trading Features
+
+### 30. [ ] Price Check Command
+
+Quick price lookup for any coin:
+
+```
+/price BTCUSDT
+→ Shows current price, 24h change, volume
+```
+
+**Files to modify:**
+
+- `bot/handlers.py` - Add price_command
+- `bot/messages.py` - Add price message template
+- `exchanges/client.py` - Add get_single_ticker method
+
+---
+
+### 31. [ ] Volume Spike Alerts
+
+Alert when trading volume spikes unusually high (often precedes big moves):
+
+- Track rolling average volume
+- Alert when current volume > 3x average
+
+**Files to modify:**
+
+- `monitoring/tracker.py` - Add volume spike detection
+- `database/client.py` - Store volume history
+
+---
+
+### 32. [ ] Funding Rate Alerts
+
+For perpetual futures, alert when funding rates are extreme (arbitrage opportunities):
+
+- Positive funding > 0.1% (shorts get paid)
+- Negative funding < -0.1% (longs get paid)
+
+**Files to modify:**
+
+- `exchanges/client.py` - Add fetch_funding_rates
+- `monitoring/tracker.py` - Add funding rate monitoring
+
+---
+
+### 33. [ ] Open Interest Tracking
+
+Track OI changes which often precede big moves:
+
+- Alert on significant OI increases/decreases
+- Show OI in gainer/loser lists
+
+**Files to modify:**
+
+- `exchanges/client.py` - Add fetch_open_interest
+- `bot/messages.py` - Include OI in coin display
+
+---
+
+### 34. [ ] New Listing Detection
+
+Alert when a new futures pair is listed on exchanges:
+
+- Track known symbols
+- Alert when new symbols appear
+
+**Files to modify:**
+
+- `monitoring/tracker.py` - Add new listing detection
+- `database/client.py` - Store known symbols
+
+---
+
+## 👥 User Engagement
+
+### 35. [ ] Weekly Leaderboard
+
+Automated weekly summary of top movers shared to all users:
+
+- Top 5 gainers of the week
+- Top 5 losers of the week
+- Sent every Sunday
+
+**Files to modify:**
+
+- `monitoring/tracker.py` or new `monitoring/scheduler.py`
+- `bot/messages.py` - Add leaderboard template
+
+---
+
+### 36. [ ] Personal Stats Command
+
+```
+/mystats
+→ Shows alerts received, watchlist performance, member since
+```
+
+**Files to modify:**
+
+- `bot/handlers.py` - Add mystats_command
+- `database/client.py` - Track user stats
+
+---
+
+### 37. [ ] Referral System
+
+Users can invite friends and earn benefits:
+
+- Unique referral links
+- Track referrals per user
+
+**Files to modify:**
+
+- `database/client.py` - Add referrals collection
+- `bot/handlers.py` - Add referral commands
+
+---
+
+## 🎯 Advanced Alerts
+
+### 38. [ ] Price Target Alerts
+
+Custom price alerts for specific coins:
+
+```
+/alert BTCUSDT 50000
+→ Alert me when BTC hits $50,000
+```
+
+**Files to modify:**
+
+- `database/client.py` - Add price_alerts collection
+- `bot/handlers.py` - Add alert command
+- `monitoring/tracker.py` - Check price targets
+
+---
+
+### 39. [ ] Consecutive Gains/Losses Detection
+
+Alert on coins that are green/red for X days straight (trend confirmation):
+
+- 3+ consecutive green days
+- 3+ consecutive red days
+
+**Files to modify:**
+
+- `database/client.py` - Store daily price history
+- `monitoring/tracker.py` - Add streak detection
+
+---
+
+## ✨ Quality of Life
+
+### 40. [ ] Quick Actions After Results
+
+After viewing gainers, add buttons like:
+
+- "Add top 3 to watchlist"
+- "View on exchange"
+
+**Files to modify:**
+
+- `bot/keyboards.py` - Add quick action buttons
+- `bot/handlers.py` - Handle quick actions
+
+---
+
+### 41. [ ] Alert Muting (Do Not Disturb)
+
+Temporarily mute alerts for X hours:
+
+```
+/mute 8
+→ Mute alerts for 8 hours (e.g., during sleep)
+```
+
+**Files to modify:**
+
+- `database/client.py` - Add mute_until field
+- `bot/handlers.py` - Add mute command
+- `monitoring/tracker.py` - Check mute status before sending
+
+---
+
+### 42. [ ] Export Data
+
+Export watchlist or alert history as CSV:
+
+```
+/export watchlist
+/export alerts
+```
+
+**Files to modify:**
+
+- `bot/handlers.py` - Add export command
+- Generate and send CSV file
+
+---
+
 ## 📋 Implementation Priority Matrix
 
 | #   | Enhancement       | Effort    | Impact    | Priority |

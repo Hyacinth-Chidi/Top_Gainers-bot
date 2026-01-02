@@ -88,7 +88,7 @@ class DatabaseClient:
                 },
                 "$setOnInsert": {
                     "id": user_id,
-                    "alerts_enabled": True,
+                    "alerts_enabled": False,  # Default OFF - users opt-in via /alerts
                     "created_at": now
                 }
             },
