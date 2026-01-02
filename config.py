@@ -29,6 +29,12 @@ class Config:
     ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
     IS_PRODUCTION = ENVIRONMENT == "production"
     
+    # Admin Settings
+    # Comma-separated list of Telegram user IDs who have admin access
+    # Example: ADMIN_USER_IDS=123456789,987654321
+    _admin_ids_str = os.getenv("ADMIN_USER_IDS", "")
+    ADMIN_USER_IDS = [int(uid.strip()) for uid in _admin_ids_str.split(",") if uid.strip()]
+    
     @classmethod
     def validate(cls):
         """Validate required configuration"""

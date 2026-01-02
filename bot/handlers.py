@@ -7,6 +7,7 @@ from datetime import datetime
 from .keyboards import BotKeyboards
 from .messages import BotMessages
 from exchanges.client import ExchangeClient
+from config import config
 
 class BotHandlers:
     """Telegram bot command and callback handlers"""
@@ -94,6 +95,109 @@ class BotHandlers:
             reply_markup=self.keyboards.alerts_toggle(alerts_enabled)
         )
     
+    async def watchlist_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /watchlist command
+        Usage:
+            /watchlist - Show current watchlist
+            /watchlist add BTCUSDT - Add symbol
+            /watchlist remove BTCUSDT - Remove symbol
+            /watchlist clear - Clear all
+        """
+        user_id = update.effective_user.id
+        args = context.args if context.args else []
+        
+        # No args - show watchlist
+        if not args:
+            watchlist = await self.db.get_user_watchlist(user_id)
+            message = self.messages.format_watchlist(watchlist)
+            await update.message.reply_text(
+                message,
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=self.keyboards.watchlist_menu()
+            )
+            return
+        
+        action = args[0].lower()
+        
+        # Add symbol
+        if action == "add":
+            if len(args) < 2:
+                await update.message.reply_text(
+                    "⚠️ Please specify a symbol.\n\nExample: `/watchlist add BTCUSDT`",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                return
+            
+            symbol = args[1].upper()
+            added = await self.db.add_to_watchlist(user_id, symbol)
+            
+            if added:
+                # Normalize symbol for display
+                display_symbol = symbol if symbol.endswith("USDT") else f"{symbol}USDT"
+                await update.message.reply_text(
+                    f"✅ **{display_symbol}** added to your watchlist!\n\nYou'll receive priority alerts for this coin.",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            else:
+                await update.message.reply_text(
+                    f"ℹ️ **{symbol}** is already in your watchlist.",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+        
+        # Remove symbol
+        elif action == "remove" or action == "delete":
+            if len(args) < 2:
+                await update.message.reply_text(
+                    "⚠️ Please specify a symbol.\n\nExample: `/watchlist remove BTCUSDT`",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                return
+            
+            symbol = args[1].upper()
+            removed = await self.db.remove_from_watchlist(user_id, symbol)
+            
+            if removed:
+                await update.message.reply_text(
+                    f"🗑️ **{symbol}** removed from your watchlist.",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            else:
+                await update.message.reply_text(
+                    f"ℹ️ **{symbol}** was not in your watchlist.",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+        
+        # Clear all
+        elif action == "clear":
+            count = await self.db.clear_watchlist(user_id)
+            if count > 0:
+                await update.message.reply_text(
+                    f"🗑️ Cleared **{count}** symbols from your watchlist.",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            else:
+                await update.message.reply_text(
+                    "ℹ️ Your watchlist was already empty.",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+        
+        # Show watchlist (explicit)
+        elif action == "show" or action == "list":
+            watchlist = await self.db.get_user_watchlist(user_id)
+            message = self.messages.format_watchlist(watchlist)
+            await update.message.reply_text(
+                message,
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=self.keyboards.watchlist_menu()
+            )
+        
+        # Unknown action
+        else:
+            await update.message.reply_text(
+                self.messages.WATCHLIST_HELP,
+                parse_mode=ParseMode.MARKDOWN
+            )
+    
     async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle all inline button callbacks"""
         query = update.callback_query
@@ -113,6 +217,8 @@ class BotHandlers:
             await self._handle_menu_selection(query, data)
         elif data.startswith("toggle_exch:"):
             await self._handle_exchange_filter_toggle(query, user_id, data)
+        elif data.startswith("watchlist:"):
+            await self._handle_watchlist_action(query, user_id, data)
     
     async def _handle_exchange_selection(self, query, user_id: int, data: str):
         """Handle exchange selection"""
@@ -282,4 +388,231 @@ class BotHandlers:
                 self.messages.HELP,
                 parse_mode=ParseMode.MARKDOWN,
                 reply_markup=self.keyboards.back_to_menu()
+            )
+        elif action == "watchlist":
+            user_id = query.from_user.id
+            watchlist = await self.db.get_user_watchlist(user_id)
+            message = self.messages.format_watchlist(watchlist)
+            
+            await query.answer()
+            await query.message.reply_text(
+                message,
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=self.keyboards.watchlist_menu()
+            )
+    
+    async def _handle_watchlist_action(self, query, user_id: int, data: str):
+        """Handle watchlist button actions"""
+        action = data.split(":")[1]
+        
+        if action == "add_prompt":
+            await query.answer()
+            await query.message.reply_text(
+                "➕ **Add to Watchlist**\n\n"
+                "Send the symbol you want to add:\n\n"
+                "Example: `/watchlist add BTCUSDT`\n"
+                "Or just: `/watchlist add BTC`",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        elif action == "clear":
+            count = await self.db.clear_watchlist(user_id)
+            if count > 0:
+                await query.answer(f"Cleared {count} coins!")
+                await query.edit_message_text(
+                    f"🗑️ Cleared **{count}** symbols from your watchlist.\n\n"
+                    "Your watchlist is now empty.",
+                    parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=self.keyboards.watchlist_menu()
+                )
+            else:
+                await query.answer("Watchlist already empty")
+                await query.edit_message_text(
+                    "ℹ️ Your watchlist was already empty.",
+                    parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=self.keyboards.watchlist_menu()
+                )
+    
+    # ==================== ADMIN COMMANDS ====================
+    
+    def _is_admin(self, user_id: int) -> bool:
+        """Check if user is an admin"""
+        return user_id in config.ADMIN_USER_IDS
+    
+    async def broadcast_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /broadcast command - Send message to all users (Admin only)
+        Usage: /broadcast Your message here
+        """
+        user_id = update.effective_user.id
+        
+        if not self._is_admin(user_id):
+            await update.message.reply_text("⛔ You don't have permission to use this command.")
+            return
+        
+        # Get message to broadcast
+        if not context.args:
+            await update.message.reply_text(
+                "⚠️ Please provide a message to broadcast.\n\n"
+                "Usage: `/broadcast Your message here`",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+        
+        broadcast_message = " ".join(context.args)
+        
+        # Get all users
+        users = await self.db.get_all_users()
+        
+        if not users:
+            await update.message.reply_text("ℹ️ No users to broadcast to.")
+            return
+        
+        # Send status
+        status_msg = await update.message.reply_text(
+            f"📡 Broadcasting to {len(users)} users...",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        
+        # Broadcast to all users
+        success = 0
+        failed = 0
+        
+        for user in users:
+            try:
+                # Skip banned users
+                if await self.db.is_banned(user['id']):
+                    continue
+                    
+                await context.bot.send_message(
+                    chat_id=user['id'],
+                    text=f"📢 **Announcement**\n\n{broadcast_message}",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                success += 1
+            except Exception:
+                failed += 1
+        
+        await status_msg.edit_text(
+            f"✅ **Broadcast Complete**\n\n"
+            f"• Sent: {success}\n"
+            f"• Failed: {failed}\n"
+            f"• Total: {len(users)}",
+            parse_mode=ParseMode.MARKDOWN
+        )
+    
+    async def stats_admin_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /stats_admin command - Show bot statistics (Admin only)"""
+        user_id = update.effective_user.id
+        
+        if not self._is_admin(user_id):
+            await update.message.reply_text("⛔ You don't have permission to use this command.")
+            return
+        
+        # Get stats
+        stats = await self.db.get_bot_stats()
+        
+        message = f"""
+📊 **Bot Statistics**
+
+👥 **Users:**
+• Total: {stats['total_users']}
+• Active (24h): {stats['active_24h']}
+• Alerts Enabled: {stats['alerts_enabled']}
+• Banned: {stats['banned_users']}
+
+📋 **Watchlists:**
+• Users with watchlist: {stats['users_with_watchlist']}
+• Total items tracked: {stats['total_watchlist_items']}
+
+🔔 **Alerts:**
+• Total sent (all time): {stats['alerts_sent_total']}
+
+📈 **Exchanges Monitored:** {len(config.EXCHANGES)}
+• {', '.join(e.upper() for e in config.EXCHANGES)}
+"""
+        
+        await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
+    
+    async def ban_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /ban command - Ban a user (Admin only)
+        Usage: /ban <user_id> [reason]
+        """
+        admin_id = update.effective_user.id
+        
+        if not self._is_admin(admin_id):
+            await update.message.reply_text("⛔ You don't have permission to use this command.")
+            return
+        
+        if not context.args:
+            await update.message.reply_text(
+                "⚠️ Please provide a user ID to ban.\n\n"
+                "Usage: `/ban <user_id> [reason]`\n"
+                "Example: `/ban 123456789 Spam`",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+        
+        try:
+            target_user_id = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text("⚠️ Invalid user ID. Must be a number.")
+            return
+        
+        # Prevent banning admins
+        if target_user_id in config.ADMIN_USER_IDS:
+            await update.message.reply_text("⚠️ Cannot ban an admin.")
+            return
+        
+        reason = " ".join(context.args[1:]) if len(context.args) > 1 else "No reason provided"
+        
+        banned = await self.db.ban_user(target_user_id, admin_id, reason)
+        
+        if banned:
+            await update.message.reply_text(
+                f"🚫 **User Banned**\n\n"
+                f"• User ID: `{target_user_id}`\n"
+                f"• Reason: {reason}",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        else:
+            await update.message.reply_text(
+                f"ℹ️ User `{target_user_id}` is already banned.",
+                parse_mode=ParseMode.MARKDOWN
+            )
+    
+    async def unban_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /unban command - Unban a user (Admin only)
+        Usage: /unban <user_id>
+        """
+        admin_id = update.effective_user.id
+        
+        if not self._is_admin(admin_id):
+            await update.message.reply_text("⛔ You don't have permission to use this command.")
+            return
+        
+        if not context.args:
+            await update.message.reply_text(
+                "⚠️ Please provide a user ID to unban.\n\n"
+                "Usage: `/unban <user_id>`",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+        
+        try:
+            target_user_id = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text("⚠️ Invalid user ID. Must be a number.")
+            return
+        
+        unbanned = await self.db.unban_user(target_user_id)
+        
+        if unbanned:
+            await update.message.reply_text(
+                f"✅ **User Unbanned**\n\n"
+                f"• User ID: `{target_user_id}`",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        else:
+            await update.message.reply_text(
+                f"ℹ️ User `{target_user_id}` was not banned.",
+                parse_mode=ParseMode.MARKDOWN
             )

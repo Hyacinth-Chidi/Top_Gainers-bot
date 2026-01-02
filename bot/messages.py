@@ -11,7 +11,9 @@ I track the crypto futures market to find the best trading opportunities for you
 🎯 **What I Do:**
 • 📈 **Gainers**: Top 5/10/20 winners 
 • 📉 **Losers**: Top 5/10/20 dippers (buy the dip!)
-• ⚡ **Spike Alerts**: Notification when price pumps 5% in 5 mins
+• 📝 **Watchlist**: Track your favorite coins
+• ⚡ **Pump Alerts**: Notification when price pumps 5%+ in 5 mins
+• 💥 **Dump Alerts**: Notification when price drops 5%+ in 5 mins
 • 🛡️ **Exchange Filter**: You choose which exchanges to track
 
 📊 **Exchanges Supported:**
@@ -23,17 +25,26 @@ I track the crypto futures market to find the best trading opportunities for you
     HELP = """
 🆘 **Top Gainers Bot Help**
 
-I help you catch pumps and trade volatility on major futures exchanges.
+I help you catch pumps, dumps, and trade volatility on major futures exchanges.
 
 ✨ **Main Commands:**
 • /gainers - View top rising coins 📈
 • /losers - View top falling coins 📉
+• /watchlist - Manage your watchlist 📝
 • /alerts - Configure your notifications 🔔
+
+📝 **Watchlist Commands:**
+• `/watchlist` - View your list
+• `/watchlist add BTC` - Add a coin
+• `/watchlist remove BTC` - Remove a coin
+• `/watchlist clear` - Clear all
 
 ⚡ **About Alerts:**
 I watch the market 24/7 and notify you when:
-1. **Volatility Spike**: A coin pumps >5% in 5 minutes 🚀
-2. **Daily Gainer**: A coin hits +30% to +70% on the day 🔥
+1. **Pump Alert**: A coin pumps >5% in 5 minutes 🚀
+2. **Dump Alert**: A coin drops >5% in 5 minutes 💥
+3. **Daily Gainer**: A coin hits +30% to +70% on the day 🔥
+4. **Daily Loser**: A coin drops -30% to -70% on the day 📉
 
 🛠️ **Settings:**
 Use /alerts → "Filter Exchanges" to select only the exchanges you trade on.
@@ -147,6 +158,58 @@ _Questions? Feedback? Contact the developer._
         message += "\n⚠️ High volatility alert! DYOR."
         return message.strip()
     
+    @staticmethod
+    def format_dump_alert(symbol: str, exchange: str, price: float, change_5m: float, volume: float, url: str = "") -> str:
+        """Format volatility dump alert message (5-min crash)"""
+        # Format volume
+        if volume >= 1_000_000_000:
+            vol_str = f"${volume/1_000_000_000:.2f}B"
+        elif volume >= 1_000_000:
+            vol_str = f"${volume/1_000_000:.2f}M"
+        else:
+            vol_str = f"${volume/1_000:.2f}K"
+        
+        message = f"""
+💥 **DUMP DETECTED!**
+
+🪙 **{symbol}**
+📍 Exchange: {exchange.upper()}
+💰 Price: ${price:.4f}
+📉 **Drop: {change_5m:.2f}% (5m)**
+📊 Volume: {vol_str}
+"""
+        if url:
+            message += f"🔗 [Trade Now]({url})\n"
+            
+        message += "\n⚠️ Sharp drop detected! Check for short opportunities. DYOR."
+        return message.strip()
+    
+    @staticmethod
+    def format_daily_dump_alert(symbol: str, exchange: str, price: float, change_24h: float, volume: float, url: str = "") -> str:
+        """Format daily dump alert message (24h loser)"""
+        # Format volume
+        if volume >= 1_000_000_000:
+            vol_str = f"${volume/1_000_000_000:.2f}B"
+        elif volume >= 1_000_000:
+            vol_str = f"${volume/1_000_000:.2f}M"
+        else:
+            vol_str = f"${volume/1_000:.2f}K"
+        
+        message = f"""
+📉 **BIG DROP ALERT!**
+
+🪙 **{symbol}**
+📍 Exchange: {exchange.upper()}
+💰 Price: ${price:.4f}
+🔻 Loss: {change_24h:.2f}% (24h)
+📊 Volume: {vol_str}
+"""
+        if url:
+            message += f"🔗 [Trade Now]({url})\n"
+            
+        message += "\n⚠️ Major daily loser! Potential short or buy-the-dip opportunity. DYOR."
+        return message.strip()
+    
     ALERTS_ENABLED = """
 ✅ **Alerts Enabled!**
 
@@ -167,3 +230,42 @@ You can re-enable them anytime with /alerts
     SELECT_COUNT = "🔢 **How many coins?**\n\nSelect the number of results to display:"
     
     LOADING = "⏳ **Fetching data...** Please wait."
+    
+    WATCHLIST_HELP = """
+📋 **Watchlist Commands**
+
+• `/watchlist` - View your watchlist
+• `/watchlist add BTCUSDT` - Add a coin
+• `/watchlist remove BTCUSDT` - Remove a coin
+• `/watchlist clear` - Clear all coins
+
+**Example:**
+`/watchlist add BTC` → Adds BTCUSDT
+`/watchlist add ETH` → Adds ETHUSDT
+"""
+    
+    @staticmethod
+    def format_watchlist(symbols: list) -> str:
+        """Format user's watchlist for display"""
+        if not symbols:
+            return """
+📋 **Your Watchlist**
+
+_No coins in your watchlist yet._
+
+Add coins with:
+`/watchlist add BTCUSDT`
+`/watchlist add ETH`
+
+Watchlist coins get **priority alerts** when they pump or dump!
+"""
+        
+        header = f"📋 **Your Watchlist** ({len(symbols)} coins)\n\n"
+        
+        lines = []
+        for i, symbol in enumerate(symbols, 1):
+            lines.append(f"{i}. `{symbol}`")
+        
+        footer = "\n\n💡 Use `/watchlist remove SYMBOL` to remove a coin"
+        
+        return header + "\n".join(lines) + footer

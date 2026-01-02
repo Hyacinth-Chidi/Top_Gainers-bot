@@ -106,10 +106,25 @@ class BotKeyboards:
                 InlineKeyboardButton("📉 Top Losers", callback_data="menu:losers"),
             ],
             [
-                InlineKeyboardButton("🔔 Alert Settings", callback_data="menu:alerts"),
+                InlineKeyboardButton("📋 Watchlist", callback_data="menu:watchlist"),
+                InlineKeyboardButton("🔔 Alerts", callback_data="menu:alerts"),
             ],
             [
                 InlineKeyboardButton("ℹ️ Help", callback_data="menu:help"),
+            ],
+        ]
+        return InlineKeyboardMarkup(keyboard)
+    
+    @staticmethod
+    def watchlist_menu():
+        """Watchlist action keyboard"""
+        keyboard = [
+            [
+                InlineKeyboardButton("➕ Add Coin", callback_data="watchlist:add_prompt"),
+                InlineKeyboardButton("🗑️ Clear All", callback_data="watchlist:clear"),
+            ],
+            [
+                InlineKeyboardButton("🔙 Back to Menu", callback_data="menu:main"),
             ],
         ]
         return InlineKeyboardMarkup(keyboard)

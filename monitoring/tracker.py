@@ -10,9 +10,10 @@ from bot.messages import BotMessages
 from config import config
 
 class SpikeTracker:
-    """Monitor exchanges for sudden price spikes and alert users"""
+    """Monitor exchanges for sudden price spikes/dumps and alert users"""
     
     MIN_VOLATILITY_THRESHOLD = 5.0  # 5% pump
+    MIN_DUMP_THRESHOLD = -5.0       # -5% dump (negative value)
     VOLATILITY_WINDOW_MINUTES = 5   # In 5 minutes
 
     def __init__(self, exchange_client: ExchangeClient, bot: Bot, db: DatabaseClient):
@@ -81,37 +82,48 @@ class SpikeTracker:
                 self.price_history[cache_key] = []
             self.price_history[cache_key].append((price, now))
             
-            # 2. Check for Short-Term Volatility (Pump)
-            volatility_spike = self._check_volatility(cache_key, price, now)
+            # 2. Check for Short-Term Volatility (Pump or Dump)
+            volatility_change = self._get_volatility_change(cache_key, price, now)
+            is_pump = volatility_change >= self.MIN_VOLATILITY_THRESHOLD
+            is_dump = volatility_change <= self.MIN_DUMP_THRESHOLD
             
-            # 3. Check for 24h High Spike
+            # 3. Check for 24h High Spike (gainers)
             daily_spike = config.MIN_SPIKE_THRESHOLD <= change_24h <= config.MAX_SPIKE_THRESHOLD
             
-            if daily_spike or volatility_spike:
-                # Calculate valid pump % if volatility triggered
-                # volatility_spike boolean doesn't carry the value. 
-                # Ideally _check_volatility returns value or None.
-                # Retrying _check_volatility logic inside alert or redefining it 
-                # for now let's just re-calculate or assume > 5%
-                
+            # 4. Check for 24h Big Drop (losers) - mirror of spike thresholds
+            daily_dump = -config.MAX_SPIKE_THRESHOLD <= change_24h <= -config.MIN_SPIKE_THRESHOLD
+            
+            # Determine if we should alert
+            should_process = daily_spike or daily_dump or is_pump or is_dump
+            
+            if should_process:
                 # Check for rate limits
                 if await self._should_alert(cache_key, symbol, exchange, change_24h):
                     
-                    # Decide alert type
-                    is_pump = volatility_spike
-                    # If both, treat as pump (more urgent)? Or 24h?
-                    # Let's say: if it's a pump, show pump alert.
-                    
-                    pump_change = 0.0
+                    # Determine alert type and direction
                     if is_pump:
-                         # Get the actual change
-                         pump_change = self._get_volatility_change(cache_key, price, now)
-
-                    await self._send_spike_alert(
-                        symbol, exchange, price, change_24h, volume,
-                        is_pump=is_pump,
-                        pump_change=pump_change
-                    )
+                        await self._send_spike_alert(
+                            symbol, exchange, price, change_24h, volume,
+                            is_pump=True,
+                            pump_change=volatility_change
+                        )
+                    elif is_dump:
+                        await self._send_dump_alert(
+                            symbol, exchange, price, change_24h, volume,
+                            dump_change=volatility_change
+                        )
+                    elif daily_spike:
+                        await self._send_spike_alert(
+                            symbol, exchange, price, change_24h, volume,
+                            is_pump=False,
+                            pump_change=0.0
+                        )
+                    elif daily_dump:
+                        await self._send_dump_alert(
+                            symbol, exchange, price, change_24h, volume,
+                            dump_change=change_24h,
+                            is_daily=True
+                        )
                     
                     # Record this alert
                     self.alerted_spikes[cache_key] = datetime.utcnow()
@@ -255,6 +267,58 @@ class SpikeTracker:
                 await asyncio.sleep(0.05)  # Rate limiting
             except Exception as e:
                 print(f"Failed to send alert to user {user['id']}: {e}")
+    
+    async def _send_dump_alert(
+        self, 
+        symbol: str, 
+        exchange: str, 
+        price: float, 
+        change_24h: float, 
+        volume: float,
+        dump_change: float = 0.0,
+        is_daily: bool = False
+    ):
+        """Send dump alert to all users with alerts enabled"""
+        # Get all users with alerts enabled (includes preferences from lookup)
+        users = await self.db.get_users_with_alerts_enabled()
+        
+        if not users:
+            return
+            
+        # Generate URL once
+        url = self.exchange_client._generate_trade_link(exchange, symbol)
+        
+        # Format alert message
+        if is_daily:
+            message = self.messages.format_daily_dump_alert(
+                symbol, exchange, price, change_24h, volume, url
+            )
+            print(f"📉 Sending DAILY DUMP alert: {symbol} on {exchange} ({change_24h:.2f}%)")
+        else:
+            message = self.messages.format_dump_alert(
+                symbol, exchange, price, dump_change, volume, url
+            )
+            print(f"💥 Sending DUMP alert: {symbol} on {exchange} ({dump_change:.2f}% in 5m)")
+        
+        # Send to valid users
+        for user in users:
+            try:
+                # Check user preferences
+                prefs = user.get('prefs', {})
+                if prefs:
+                    allowed_exchanges = prefs.get('alert_exchanges')
+                    if allowed_exchanges is not None: 
+                        if exchange not in allowed_exchanges:
+                            continue
+                
+                await self.bot.send_message(
+                    chat_id=user['id'],
+                    text=message,
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                await asyncio.sleep(0.05)  # Rate limiting
+            except Exception as e:
+                print(f"Failed to send dump alert to user {user['id']}: {e}")
     
     def cleanup_old_alerts(self):
         """Clean up old entries from alerted_spikes cache"""

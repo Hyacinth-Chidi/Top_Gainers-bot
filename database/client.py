@@ -15,6 +15,8 @@ class DatabaseClient:
         self.user_preferences = None
         self.price_snapshots = None
         self.alert_history = None
+        self.watchlists = None
+        self.banned_users = None  # Admin: banned users
     
     async def connect(self):
         """Connect to MongoDB"""
@@ -27,6 +29,8 @@ class DatabaseClient:
             self.user_preferences = self.db.user_preferences
             self.price_snapshots = self.db.price_snapshots
             self.alert_history = self.db.alert_history
+            self.watchlists = self.db.watchlists
+            self.banned_users = self.db.banned_users  # Admin: banned users
             
             # Create indexes
             await self._create_indexes()
@@ -52,6 +56,12 @@ class DatabaseClient:
         
         # Alert history indexes
         await self.alert_history.create_index([("symbol", 1), ("exchange", 1), ("alerted_at", -1)])
+        
+        # Watchlist indexes
+        await self.watchlists.create_index("user_id", unique=True)
+        
+        # Banned users indexes
+        await self.banned_users.create_index("user_id", unique=True)
     
     async def disconnect(self):
         """Disconnect from MongoDB"""
@@ -187,3 +197,152 @@ class DatabaseClient:
         ).sort("timestamp", -1).limit(limit)
         
         return await cursor.to_list(length=None)
+    
+    # Watchlist operations
+    async def get_user_watchlist(self, user_id: int) -> List[str]:
+        """Get user's watchlist symbols"""
+        doc = await self.watchlists.find_one({"user_id": user_id})
+        if doc:
+            return doc.get("symbols", [])
+        return []
+    
+    async def add_to_watchlist(self, user_id: int, symbol: str) -> bool:
+        """Add a symbol to user's watchlist. Returns True if added, False if already exists."""
+        # Normalize symbol (uppercase, remove common suffixes)
+        symbol = symbol.upper().replace("/USDT", "").replace("-USDT", "")
+        if not symbol.endswith("USDT"):
+            symbol = f"{symbol}USDT"
+        
+        # Check if already in watchlist
+        current = await self.get_user_watchlist(user_id)
+        if symbol in current:
+            return False
+        
+        # Add to watchlist
+        await self.watchlists.update_one(
+            {"user_id": user_id},
+            {"$addToSet": {"symbols": symbol}},
+            upsert=True
+        )
+        return True
+    
+    async def remove_from_watchlist(self, user_id: int, symbol: str) -> bool:
+        """Remove a symbol from user's watchlist. Returns True if removed, False if not found."""
+        # Normalize symbol
+        symbol = symbol.upper().replace("/USDT", "").replace("-USDT", "")
+        if not symbol.endswith("USDT"):
+            symbol = f"{symbol}USDT"
+        
+        # Check if in watchlist
+        current = await self.get_user_watchlist(user_id)
+        if symbol not in current:
+            return False
+        
+        # Remove from watchlist
+        await self.watchlists.update_one(
+            {"user_id": user_id},
+            {"$pull": {"symbols": symbol}}
+        )
+        return True
+    
+    async def clear_watchlist(self, user_id: int) -> int:
+        """Clear user's entire watchlist. Returns number of symbols removed."""
+        current = await self.get_user_watchlist(user_id)
+        count = len(current)
+        
+        if count > 0:
+            await self.watchlists.update_one(
+                {"user_id": user_id},
+                {"$set": {"symbols": []}}
+            )
+        return count
+    
+    async def is_in_watchlist(self, user_id: int, symbol: str) -> bool:
+        """Check if a symbol is in user's watchlist"""
+        # Normalize symbol
+        symbol = symbol.upper().replace("/USDT", "").replace("-USDT", "")
+        if not symbol.endswith("USDT"):
+            symbol = f"{symbol}USDT"
+        
+        current = await self.get_user_watchlist(user_id)
+        return symbol in current
+    
+    async def get_watchlist_users_for_symbol(self, symbol: str) -> List[int]:
+        """Get all user IDs who have this symbol in their watchlist"""
+        # Normalize symbol
+        symbol = symbol.upper().replace("/USDT", "").replace("-USDT", "")
+        if not symbol.endswith("USDT"):
+            symbol = f"{symbol}USDT"
+        
+        cursor = self.watchlists.find({"symbols": symbol})
+        docs = await cursor.to_list(length=None)
+        return [doc["user_id"] for doc in docs]
+    
+    # Admin operations
+    async def ban_user(self, user_id: int, banned_by: int, reason: str = "") -> bool:
+        """Ban a user. Returns True if newly banned, False if already banned."""
+        existing = await self.banned_users.find_one({"user_id": user_id})
+        if existing:
+            return False
+        
+        await self.banned_users.insert_one({
+            "user_id": user_id,
+            "banned_by": banned_by,
+            "reason": reason,
+            "banned_at": datetime.utcnow()
+        })
+        return True
+    
+    async def unban_user(self, user_id: int) -> bool:
+        """Unban a user. Returns True if unbanned, False if wasn't banned."""
+        result = await self.banned_users.delete_one({"user_id": user_id})
+        return result.deleted_count > 0
+    
+    async def is_banned(self, user_id: int) -> bool:
+        """Check if a user is banned"""
+        doc = await self.banned_users.find_one({"user_id": user_id})
+        return doc is not None
+    
+    async def get_banned_users(self) -> List[Dict]:
+        """Get all banned users"""
+        cursor = self.banned_users.find({})
+        return await cursor.to_list(length=None)
+    
+    async def get_all_users(self) -> List[Dict]:
+        """Get all registered users"""
+        cursor = self.users.find({})
+        return await cursor.to_list(length=None)
+    
+    async def get_user_count(self) -> int:
+        """Get total user count"""
+        return await self.users.count_documents({})
+    
+    async def get_active_users_count(self, hours: int = 24) -> int:
+        """Get count of users active in last N hours"""
+        from datetime import timedelta
+        cutoff = datetime.utcnow() - timedelta(hours=hours)
+        return await self.users.count_documents({"last_active": {"$gte": cutoff}})
+    
+    async def get_bot_stats(self) -> Dict:
+        """Get overall bot statistics for admin dashboard"""
+        total_users = await self.get_user_count()
+        active_24h = await self.get_active_users_count(24)
+        alerts_enabled = await self.users.count_documents({"alerts_enabled": True})
+        alerts_sent = await self.alert_history.count_documents({})
+        banned_count = await self.banned_users.count_documents({})
+        
+        # Get watchlist stats
+        watchlist_cursor = self.watchlists.find({})
+        watchlists = await watchlist_cursor.to_list(length=None)
+        total_watchlist_items = sum(len(w.get("symbols", [])) for w in watchlists)
+        users_with_watchlist = len([w for w in watchlists if w.get("symbols")])
+        
+        return {
+            "total_users": total_users,
+            "active_24h": active_24h,
+            "alerts_enabled": alerts_enabled,
+            "alerts_sent_total": alerts_sent,
+            "banned_users": banned_count,
+            "users_with_watchlist": users_with_watchlist,
+            "total_watchlist_items": total_watchlist_items
+        }
