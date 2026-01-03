@@ -219,6 +219,8 @@ class BotHandlers:
             await self._handle_exchange_filter_toggle(query, user_id, data)
         elif data.startswith("watchlist:"):
             await self._handle_watchlist_action(query, user_id, data)
+        elif data.startswith("toggle_alert:"):
+            await self._handle_alert_type_toggle(query, user_id, data)
     
     async def _handle_exchange_selection(self, query, user_id: int, data: str):
         """Handle exchange selection"""
@@ -382,6 +384,18 @@ class BotHandlers:
                 parse_mode=ParseMode.MARKDOWN,
                 reply_markup=self.keyboards.alerts_exchange_selection(current_exchanges)
             )
+        elif action == "alert_types":
+            user_id = query.from_user.id
+            alert_types = await self.db.get_user_alert_types(user_id)
+            
+            await query.answer()
+            await query.message.reply_text(
+                "🎚️ **Alert Types**\n\n"
+                "Select which alerts you want to receive:\n\n"
+                "_Toggle each type on or off:_",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=self.keyboards.alert_types_selection(alert_types)
+            )
         elif action == "help":
             await query.answer()
             await query.message.reply_text(
@@ -431,6 +445,38 @@ class BotHandlers:
                     parse_mode=ParseMode.MARKDOWN,
                     reply_markup=self.keyboards.watchlist_menu()
                 )
+    
+    async def _handle_alert_type_toggle(self, query, user_id: int, data: str):
+        """Handle toggling individual alert types on/off"""
+        alert_type = data.split(":")[1]
+        
+        # Toggle the alert type
+        new_state = await self.db.toggle_alert_type(user_id, alert_type)
+        
+        # Get updated alert types for keyboard refresh
+        alert_types = await self.db.get_user_alert_types(user_id)
+        
+        # Map alert type to display name
+        type_names = {
+            "early_pumps": "🔮 Early Pump Signals",
+            "confirmed_pumps": "🚀 Confirmed Pumps",
+            "dumps": "💥 Dump Alerts",
+            "daily_spikes": "🔥 Daily Gainers",
+            "daily_dumps": "📉 Daily Losers"
+        }
+        
+        type_name = type_names.get(alert_type, alert_type)
+        state_text = "enabled ✅" if new_state else "disabled ❌"
+        
+        await query.answer(f"{type_name} {state_text}")
+        
+        await query.edit_message_text(
+            "🎚️ **Alert Types**\n\n"
+            "Select which alerts you want to receive:\n\n"
+            "_Toggle each type on or off:_",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=self.keyboards.alert_types_selection(alert_types)
+        )
     
     # ==================== ADMIN COMMANDS ====================
     

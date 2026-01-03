@@ -63,10 +63,58 @@ class BotKeyboards:
                 )
             ],
             [
+                InlineKeyboardButton("🎚️ Alert Types", callback_data="menu:alert_types"),
+            ],
+            [
                 InlineKeyboardButton("🛠️ Filter Exchanges", callback_data="menu:filter_exchanges"),
             ],
             [
                 InlineKeyboardButton("🔙 Back to Menu", callback_data="menu:main"),
+            ],
+        ]
+        return InlineKeyboardMarkup(keyboard)
+    
+    @staticmethod
+    def alert_types_selection(alert_types: dict):
+        """Keyboard for selecting which alert types to receive"""
+        
+        def get_text(label, key):
+            is_enabled = alert_types.get(key, False)
+            return f"{'✅' if is_enabled else '❌'} {label}"
+        
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    get_text("🔮 Early Pump Signals", "early_pumps"), 
+                    callback_data="toggle_alert:early_pumps"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    get_text("🚀 Confirmed Pumps", "confirmed_pumps"), 
+                    callback_data="toggle_alert:confirmed_pumps"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    get_text("💥 Dump Alerts", "dumps"), 
+                    callback_data="toggle_alert:dumps"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    get_text("🔥 Daily Gainers", "daily_spikes"), 
+                    callback_data="toggle_alert:daily_spikes"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    get_text("📉 Daily Losers", "daily_dumps"), 
+                    callback_data="toggle_alert:daily_dumps"
+                ),
+            ],
+            [
+                InlineKeyboardButton("🔙 Back to Alerts", callback_data="menu:alerts"),
             ],
         ]
         return InlineKeyboardMarkup(keyboard)

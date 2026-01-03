@@ -714,6 +714,8 @@ _Move items here once implemented:_
 
 - **#19 - Admin Commands** (2026-01-02): Added `/broadcast`, `/stats_admin`, `/ban`, `/unban` commands. Admins configured via ADMIN_USER_IDS env variable.
 
+- **Multi-Factor Pump Detection Phase 1** (2026-01-03): Implemented smart pump scoring system with volume spike detection (3x average), momentum tracking (consecutive gains), and early pump alerts. Scoring: Volume (30pts) + Momentum (25pts) + Volatility (25pts) + Daily Trend (20pts). Alerts at score ≥50.
+
 ---
 
 ## 📝 Notes

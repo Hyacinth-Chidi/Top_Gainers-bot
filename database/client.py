@@ -129,10 +129,18 @@ class DatabaseClient:
         default_prefs = {
             "user_id": user_id,
             "preferred_exchanges": ["binance", "bybit", "mexc", "bitget", "gateio"],
-            "alert_exchanges": ["binance", "bybit", "mexc", "bitget", "gateio"],  # Enabled exchanges for alerts
+            "alert_exchanges": ["binance", "bybit", "mexc", "bitget", "gateio"],
             "default_top_count": 10,
             "min_alert_threshold": 30,
-            "max_alert_threshold": 70
+            "max_alert_threshold": 70,
+            # Alert type preferences (default ON except daily_dumps)
+            "alert_types": {
+                "early_pumps": True,      # 🔮 Early pump signals (score-based)
+                "confirmed_pumps": True,  # 🚀 Confirmed pumps (+5% in 5m)
+                "dumps": True,            # 💥 Dump alerts (-5% in 5m)
+                "daily_spikes": True,     # 🔥 Daily gainers (+30-70%)
+                "daily_dumps": False      # 📉 Daily losers (off by default)
+            }
         }
         
         await self.user_preferences.update_one(
@@ -148,6 +156,51 @@ class DatabaseClient:
             {"$set": {"alert_exchanges": exchanges}},
             upsert=True
         )
+    
+    async def toggle_alert_type(self, user_id: int, alert_type: str) -> bool:
+        """Toggle a specific alert type on/off. Returns new state."""
+        prefs = await self.get_user_preferences(user_id)
+        if not prefs:
+            await self.create_default_preferences(user_id)
+            prefs = await self.get_user_preferences(user_id)
+        
+        # Get current alert_types or use defaults
+        alert_types = prefs.get("alert_types", {
+            "early_pumps": True,
+            "confirmed_pumps": True,
+            "dumps": True,
+            "daily_spikes": True,
+            "daily_dumps": False
+        })
+        
+        # Toggle the specific type
+        current_state = alert_types.get(alert_type, False)
+        new_state = not current_state
+        alert_types[alert_type] = new_state
+        
+        # Save
+        await self.user_preferences.update_one(
+            {"user_id": user_id},
+            {"$set": {"alert_types": alert_types}},
+            upsert=True
+        )
+        
+        return new_state
+    
+    async def get_user_alert_types(self, user_id: int) -> Dict:
+        """Get user's alert type preferences"""
+        prefs = await self.get_user_preferences(user_id)
+        if prefs and "alert_types" in prefs:
+            return prefs["alert_types"]
+        
+        # Return defaults
+        return {
+            "early_pumps": True,
+            "confirmed_pumps": True,
+            "dumps": True,
+            "daily_spikes": True,
+            "daily_dumps": False
+        }
     
     # Alert history operations
     async def save_alert(self, symbol: str, exchange: str, percent_gain: float):

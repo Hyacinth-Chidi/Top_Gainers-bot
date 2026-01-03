@@ -162,6 +162,54 @@ _Questions? Feedback? Contact the developer._
         return message.strip()
     
     @staticmethod
+    def format_early_pump_alert(
+        symbol: str, 
+        exchange: str, 
+        price: float, 
+        change_24h: float, 
+        volume: float, 
+        pump_score: int,
+        confidence: str,
+        url: str = ""
+    ) -> str:
+        """Format early pump detection alert message"""
+        # Format volume
+        if volume >= 1_000_000_000:
+            vol_str = f"${volume/1_000_000_000:.2f}B"
+        elif volume >= 1_000_000:
+            vol_str = f"${volume/1_000_000:.2f}M"
+        else:
+            vol_str = f"${volume/1_000:.2f}K"
+        
+        # Choose emoji based on confidence
+        if confidence == "HIGH":
+            emoji = "🚨"
+            header = "HIGH PROBABILITY PUMP"
+        else:
+            emoji = "🔮"
+            header = "POTENTIAL PUMP DETECTED"
+        
+        message = f"""
+{emoji} **{header}**
+
+🪙 **{symbol}**
+📍 Exchange: {exchange.upper()}
+💰 Price: ${price:.6f}
+📈 24h: {'+' if change_24h >= 0 else ''}{change_24h:.2f}%
+📊 Volume: {vol_str}
+
+📊 **Pump Score: {pump_score}/100**
+✅ Confidence: {confidence}
+
+_Multi-factor analysis detected unusual activity._
+"""
+        if url:
+            message += f"🔗 [Trade Now]({url})\n"
+            
+        message += "\n⚠️ Early detection signal. DYOR!"
+        return message.strip()
+    
+    @staticmethod
     def format_dump_alert(symbol: str, exchange: str, price: float, change_5m: float, volume: float, url: str = "") -> str:
         """Format volatility dump alert message (5-min crash)"""
         # Format volume
