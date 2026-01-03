@@ -494,16 +494,38 @@ class BotHandlers:
             await update.message.reply_text("⛔ You don't have permission to use this command.")
             return
         
-        # Get message to broadcast
-        if not context.args:
+        # Get message to broadcast - preserve formatting!
+        # Use message.text and remove the /broadcast command
+        full_text = update.message.text
+        
+        # Remove the /broadcast part (handles both /broadcast and /broadcast@botname)
+        if full_text.startswith("/broadcast"):
+            # Find the first space or newline after the command
+            cmd_end = full_text.find(" ")
+            if cmd_end == -1:
+                cmd_end = full_text.find("\n")
+            
+            if cmd_end == -1:
+                # No message provided
+                await update.message.reply_text(
+                    "⚠️ Please provide a message to broadcast.\n\n"
+                    "Usage: `/broadcast Your message here`\n\n"
+                    "💡 Tip: You can use multiple lines for formatting!",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                return
+            
+            broadcast_message = full_text[cmd_end + 1:].strip()
+        else:
+            broadcast_message = " ".join(context.args)
+        
+        if not broadcast_message:
             await update.message.reply_text(
                 "⚠️ Please provide a message to broadcast.\n\n"
                 "Usage: `/broadcast Your message here`",
                 parse_mode=ParseMode.MARKDOWN
             )
             return
-        
-        broadcast_message = " ".join(context.args)
         
         # Get all users
         users = await self.db.get_all_users()
