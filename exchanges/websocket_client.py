@@ -25,6 +25,10 @@ class WebSocketClient:
         self._lock = asyncio.Lock()
         self.last_ping: Dict[str, float] = {}
         
+        # Rate limiting
+        self.MAX_SUBSCRIPTIONS = 10  # Max symbols per exchange
+        self.last_subscribe_time: Dict[str, float] = {}  # Rate limit tracking
+        
     async def start(self):
         """Start the WebSocket manager"""
         self.is_running = True
@@ -55,17 +59,39 @@ class WebSocketClient:
             return
             
         async with self._lock:
+            # Check if already subscribed
             if symbol in self.active_subscriptions[exchange]:
-                return  # Already subscribed
-                
+                return
+            
+            # Check max subscriptions limit
+            if len(self.active_subscriptions[exchange]) >= self.MAX_SUBSCRIPTIONS:
+                # Remove oldest subscription to make room
+                oldest = next(iter(self.active_subscriptions[exchange]))
+                self.active_subscriptions[exchange].remove(oldest)
+                cache_key = f"{exchange}:{oldest}"
+                if cache_key in self.order_book_cache:
+                    del self.order_book_cache[cache_key]
+                    
+            # Rate limit: wait 0.5s between subscriptions
+            last_time = self.last_subscribe_time.get(exchange, 0)
+            now = asyncio.get_event_loop().time()
+            if now - last_time < 0.5:
+                await asyncio.sleep(0.5 - (now - last_time))
+            
             self.active_subscriptions[exchange].add(symbol)
+            self.last_subscribe_time[exchange] = asyncio.get_event_loop().time()
             print(f"🎯 Sniper targeting: {symbol} on {exchange}")
             
-            # Send subscription message
-            if exchange == "binance":
-                await self._subscribe_binance(symbol)
-            elif exchange == "mexc":
-                await self._subscribe_mexc(symbol)
+            # Send subscription message (with error handling)
+            try:
+                if exchange == "binance" and self._is_connected("binance"):
+                    await self._subscribe_binance(symbol)
+                elif exchange == "mexc" and self._is_connected("mexc"):
+                    await self._subscribe_mexc(symbol)
+            except Exception as e:
+                print(f"⚠️ Failed to subscribe {symbol} on {exchange}: {e}")
+                # Remove from active if subscription failed
+                self.active_subscriptions[exchange].discard(symbol)
                 
     async def unsubscribe_order_book(self, exchange: str, symbol: str):
         """Unsubscribe to free up resources"""
@@ -112,6 +138,16 @@ class WebSocketClient:
             
         buy_pressure = (bids_volume / total_volume) * 100
         return buy_pressure
+    
+    def _is_connected(self, exchange: str) -> bool:
+        """Check if WebSocket connection is open"""
+        ws = self.connections.get(exchange)
+        if ws is None:
+            return False
+        try:
+            return ws.open
+        except:
+            return False
 
     # ================== INTERNAL METHODS ==================
 

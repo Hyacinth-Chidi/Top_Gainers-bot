@@ -105,6 +105,16 @@ class SolanaClient:
                         "liquidity": token.get("liquidity", 0),
                     })
                 return result
+            elif response.status_code == 401:
+                # Only log once to avoid spam
+                if not hasattr(self, '_auth_warned'):
+                    print("⚠️ Birdeye API: Missing or invalid API key. Get a free key at https://birdeye.so/")
+                    self._auth_warned = True
+                return []
+            elif response.status_code == 429:
+                print("⚠️ Birdeye API: Rate limit hit. Waiting...")
+                await asyncio.sleep(60)  # Wait 1 minute
+                return []
             else:
                 print(f"Birdeye API error: {response.status_code}")
                 return []
