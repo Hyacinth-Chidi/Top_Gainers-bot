@@ -11,9 +11,10 @@ class WebSocketClient:
     """
     
     # WebSocket Endpoints
+    # Note: MEXC uses Futures endpoint for perpetual contracts
     ENDPOINTS = {
         "binance": "wss://fstream.binance.com/stream",
-        "mexc": "wss://wbs.mexc.com/ws",
+        "mexc": "wss://contract.mexc.com/ws",  # Futures WebSocket (not spot)
         # "bybit": "wss://stream.bybit.com/v5/public/linear", 
     }
     
@@ -181,15 +182,16 @@ class WebSocketClient:
                 await asyncio.sleep(5)  # Reconnect delay
 
     async def _mexc_heartbeat(self):
-        """Send periodic ping to MEXC"""
+        """Send periodic ping to MEXC Futures"""
         while self.is_running:
             try:
-                if "mexc" in self.connections:
+                if "mexc" in self.connections and self._is_connected("mexc"):
                     ws = self.connections["mexc"]
-                    await ws.send(json.dumps({"method": "PING"}))
+                    # MEXC Futures ping format
+                    await ws.send(json.dumps({"method": "ping"}))
             except:
                 pass
-            await asyncio.sleep(30)
+            await asyncio.sleep(20)  # MEXC requires ping every 30s, send at 20s for safety
 
     async def _handle_message(self, exchange: str, msg: str):
         """Process incoming messages"""
@@ -211,25 +213,19 @@ class WebSocketClient:
                     }
                     
             elif exchange == "mexc":
-                # MEXC structure: {"c": "push.symbol", "d": {"deals": [{"p": "...", "v": "...", "t": ...}]}}
-                # Depth structure: {"c": "push.depth", "d": {"asks": [...], "bids": [...]}}
-                if "c" in data and data["c"].endswith("depth") and "d" in data:
-                    # Channel name eg "spot@public.limit.depth.v3.api@BTCUSDT"
-                    # We might need to map it back to symbol if not provided directly
-                    if "s" in data: # Some messages have symbol
-                        symbol = data["s"].lower()
-                    elif "symbol" in data["d"]:
-                        symbol = data["d"]["symbol"].lower()
-                    else:
-                        return # Cant identify symbol
-                        
-                    content = data["d"]
+                # MEXC Futures format: {"channel":"push.depth","data":{"asks":[[price,qty]...],"bids":...},"symbol":"BTC_USDT"}
+                if data.get("channel") == "push.depth" and "data" in data:
+                    # Get symbol from response
+                    symbol_raw = data.get("symbol", "")
+                    # Convert BTC_USDT back to btcusdt
+                    symbol = symbol_raw.replace("_", "").lower()
                     
-                    # Store data
-                    # MEXC format: {"asks": [{"p": "price", "v": "vol"}], ...}
-                    # We need to normalize to [[price, qty], ...]
-                    bids = [[x['p'], x['v']] for x in content.get('bids', [])]
-                    asks = [[x['p'], x['v']] for x in content.get('asks', [])]
+                    content = data["data"]
+                    
+                    # MEXC Futures format: [[price, qty, count], ...]
+                    # Normalize to [[price, qty], ...]
+                    bids = [[str(x[0]), str(x[1])] for x in content.get('bids', [])]
+                    asks = [[str(x[0]), str(x[1])] for x in content.get('asks', [])]
                     
                     cache_key = f"{exchange}:{symbol}"
                     self.order_book_cache[cache_key] = {
@@ -265,22 +261,26 @@ class WebSocketClient:
             await ws.send(json.dumps(payload))
 
     async def _subscribe_mexc(self, symbol: str):
-        """Send sub request to MEXC"""
-        # MEXC format: spot@public.limit.depth.v3.api@<symbol>
+        """Send sub request to MEXC Futures"""
+        # MEXC Futures format: {"method":"sub.depth","param":{"symbol":"BTC_USDT"}}
+        # Note: Symbol format is BTC_USDT (with underscore)
         ws = self.connections.get("mexc")
         if ws:
+            # Convert btcusdt to BTC_USDT format
+            formatted = symbol.upper().replace("USDT", "_USDT")
             payload = {
-                "method": "SUBSCRIPTION",
-                "params": [f"spot@public.limit.depth.v3.api@{symbol.upper()}"],
+                "method": "sub.depth",
+                "param": {"symbol": formatted}
             }
             await ws.send(json.dumps(payload))
 
     async def _unsubscribe_mexc(self, symbol: str):
-        """Send unsub request to MEXC"""
+        """Send unsub request to MEXC Futures"""
         ws = self.connections.get("mexc")
         if ws:
+            formatted = symbol.upper().replace("USDT", "_USDT")
             payload = {
-                "method": "UNSUBSCRIPTION",
-                "params": [f"spot@public.limit.depth.v3.api@{symbol.upper()}"],
+                "method": "unsub.depth",
+                "param": {"symbol": formatted}
             }
             await ws.send(json.dumps(payload))
