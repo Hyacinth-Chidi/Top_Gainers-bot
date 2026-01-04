@@ -6,6 +6,7 @@ from telegram import Bot
 from telegram.constants import ParseMode
 
 from exchanges.client import ExchangeClient
+from exchanges.websocket_client import WebSocketClient
 from bot.messages import BotMessages
 from config import config
 
@@ -28,9 +29,12 @@ class SpikeTracker:
     SCORE_MOMENTUM = 25             # Points for momentum (consecutive gains)
     SCORE_VOLATILITY = 25           # Points for 5m volatility
     SCORE_DAILY_TREND = 20          # Points for positive 24h trend
+    SCORE_ORDER_BOOK = 20           # Points for high buy pressure (>65%)
+    SCORE_ORDER_BOOK_STRONG = 35    # Points for very high buy pressure (>80%)
 
     def __init__(self, exchange_client: ExchangeClient, bot: Bot, db: DatabaseClient):
         self.exchange_client = exchange_client
+        self.ws_client = WebSocketClient()  # Initialize Sniper WebSocket
         self.bot = bot
         self.db = db
         self.messages = BotMessages()
@@ -53,12 +57,19 @@ class SpikeTracker:
         # Track early pump alerts separately (different cooldown)
         self.alerted_early_pumps: Dict[str, datetime] = {}
         
+        # Track WebSocket subscriptions (for Sniper Mode cleanup)
+        # Format: { "symbol:exchange": timestamp_added }
+        self.active_subscriptions: Dict[str, datetime] = {}
+        
         self.is_running = False
     
     async def start(self):
         """Start the monitoring loop"""
         self.is_running = True
         print("🔍 Spike tracker started")
+        
+        # Start WebSocket Client
+        await self.ws_client.start()
         
         while self.is_running:
             try:
@@ -73,6 +84,7 @@ class SpikeTracker:
     async def stop(self):
         """Stop the monitoring loop"""
         self.is_running = False
+        await self.ws_client.stop()
         print("🛑 Spike tracker stopped")
     
     async def _check_all_exchanges(self):
@@ -140,7 +152,7 @@ class SpikeTracker:
                         self.momentum_history[cache_key] = self.momentum_history[cache_key][-10:]
             
             # ===== CALCULATE SCORES =====
-            pump_score = self._calculate_pump_score(cache_key, price, volume, change_24h, now)
+            pump_score = await self._calculate_pump_score(cache_key, price, volume, change_24h, now)
             
             # ===== ORIGINAL DETECTION (still active) =====
             volatility_change = self._get_volatility_change(cache_key, price, now)
@@ -246,9 +258,11 @@ class SpikeTracker:
             return ((current_price - old_price) / old_price) * 100
         return 0.0
     
-    def _calculate_pump_score(self, cache_key: str, price: float, volume: float, change_24h: float, now: datetime) -> int:
+    async def _calculate_pump_score(self, cache_key: str, price: float, volume: float, change_24h: float, now: datetime) -> int:
         """Calculate pump probability score based on multiple factors"""
         score = 0
+        symbol = cache_key.split(":")[0]
+        exchange = cache_key.split(":")[1]
         
         # Factor 1: Volume Spike (30 points)
         volume_score = self._get_volume_spike_score(cache_key, volume)
@@ -270,6 +284,28 @@ class SpikeTracker:
             score += self.SCORE_DAILY_TREND
         elif change_24h >= 5:  # Up 5%+
             score += int(self.SCORE_DAILY_TREND * 0.5)
+            
+        # Factor 5: Order Book Imbalance (Sniper Mode)
+        # Check if we have data first
+        buy_pressure = await self.ws_client.get_order_book_imbalance(exchange, symbol)
+        
+        if buy_pressure >= 80:
+            score += self.SCORE_ORDER_BOOK_STRONG
+        elif buy_pressure >= 65:
+            score += self.SCORE_ORDER_BOOK
+            
+        # --- SNIPER MODE TRIGGER ---
+        # If score is promising but not yet an alert (e.g. 20-49), 
+        # subscribe to WebSocket to get that Order Book boost for next check!
+        if 20 <= score < self.MIN_PUMP_SCORE:
+            if cache_key not in self.active_subscriptions:
+                # Trigger sniper mode: Subscribe to order book
+                asyncio.create_task(self.ws_client.subscribe_order_book(exchange, symbol))
+                self.active_subscriptions[cache_key] = datetime.utcnow()
+            else:
+                # Update timestamp to keep it alive
+                self.active_subscriptions[cache_key] = datetime.utcnow()
+        # If score is low or we already alerted, we could unsubscribe to save resources (optional optimization)
         
         return score
     
@@ -359,6 +395,18 @@ class SpikeTracker:
         for key in list(self.alerted_early_pumps.keys()):
             if self.alerted_early_pumps[key] < alert_cutoff:
                 del self.alerted_early_pumps[key]
+                
+        # Clean old WebSocket subscriptions (older than 15 mins)
+        # "Sniper Mode" cleanup: Stop watching if no longer interesting
+        ws_cutoff = datetime.utcnow() - timedelta(minutes=15)
+        for key in list(self.active_subscriptions.keys()):
+            if self.active_subscriptions[key] < ws_cutoff:
+                # Unsubscribe
+                symbol = key.split(":")[0]
+                exchange = key.split(":")[1]
+                # Fire and forget unsubscribe task
+                asyncio.create_task(self.ws_client.unsubscribe_order_book(exchange, symbol))
+                del self.active_subscriptions[key]
     
     async def _should_alert(self, cache_key: str, symbol: str, exchange: str, current_change: float) -> bool:
         """Determine if we should send an alert for this spike"""
