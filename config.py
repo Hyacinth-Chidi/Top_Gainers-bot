@@ -35,6 +35,10 @@ class Config:
     _admin_ids_str = os.getenv("ADMIN_USER_IDS", "")
     ADMIN_USER_IDS = [int(uid.strip()) for uid in _admin_ids_str.split(",") if uid.strip()]
     
+    # DEX Tracking (Solana)
+    DEX_ENABLED = os.getenv("DEX_ENABLED", "true").lower() == "true"
+    BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY", "")  # Optional, increases rate limits
+    
     @classmethod
     def validate(cls):
         """Validate required configuration"""

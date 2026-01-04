@@ -6,6 +6,7 @@ from config import config
 from exchanges.client import ExchangeClient
 from bot.handlers import BotHandlers
 from monitoring.tracker import SpikeTracker
+from monitoring.dex_tracker import DexTracker
 
 class TopGainersBot:
     """Main application class"""
@@ -19,21 +20,31 @@ class TopGainersBot:
         self.exchange_client = ExchangeClient()
         self.application = None
         self.spike_tracker = None
+        self.dex_tracker = None
         self.monitoring_task = None
+        self.dex_task = None
     
     async def post_init(self, application: Application) -> None:
         """Called after bot initialization"""
         # Connect to database
         await self.db.connect()
         
-        # Initialize spike tracker
+        # Initialize spike tracker (CEX)
         self.spike_tracker = SpikeTracker(self.exchange_client, application.bot, self.db)
         
-        # Start spike monitoring in background
+        # Start CEX monitoring in background
         self.monitoring_task = asyncio.create_task(self.spike_tracker.start())
         
+        # Initialize DEX tracker (Solana) if enabled
+        if config.DEX_ENABLED:
+            self.dex_tracker = DexTracker(application.bot, self.db)
+            self.dex_task = asyncio.create_task(self.dex_tracker.start())
+            print("🌐 DEX Tracking: ENABLED (Solana)")
+        else:
+            print("🌐 DEX Tracking: DISABLED")
+        
         print("✅ Bot is running!")
-        print(f"📊 Monitoring {len(config.EXCHANGES)} exchanges")
+        print(f"📊 Monitoring {len(config.EXCHANGES)} CEX exchanges")
         print(f"⏱️  Check interval: {config.SPIKE_CHECK_INTERVAL}s")
         print(f"📈 Spike threshold: {config.MIN_SPIKE_THRESHOLD}%-{config.MAX_SPIKE_THRESHOLD}%")
     
@@ -41,7 +52,7 @@ class TopGainersBot:
         """Called before bot shutdown"""
         print("\n🛑 Shutting down...")
         
-        # Stop monitoring
+        # Stop CEX monitoring
         if self.spike_tracker:
             await self.spike_tracker.stop()
         
@@ -49,6 +60,17 @@ class TopGainersBot:
             self.monitoring_task.cancel()
             try:
                 await self.monitoring_task
+            except asyncio.CancelledError:
+                pass
+        
+        # Stop DEX monitoring
+        if self.dex_tracker:
+            await self.dex_tracker.stop()
+            
+        if self.dex_task and not self.dex_task.done():
+            self.dex_task.cancel()
+            try:
+                await self.dex_task
             except asyncio.CancelledError:
                 pass
         
