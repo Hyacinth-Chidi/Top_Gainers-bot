@@ -14,7 +14,7 @@ class WebSocketClient:
     # Note: MEXC uses Futures endpoint for perpetual contracts
     ENDPOINTS = {
         "binance": "wss://fstream.binance.com/stream",
-        "mexc": "wss://contract.mexc.com/ws",  # Futures WebSocket (not spot)
+        "mexc": "wss://contract.mexc.com/edge",  # Correct Futures WebSocket endpoint
         # "bybit": "wss://stream.bybit.com/v5/public/linear", 
     }
     
