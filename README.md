@@ -28,16 +28,23 @@ top-gainers-bot/
 │   ├── __init__.py
 │   ├── handlers.py       # Command & callback handlers
 │   ├── keyboards.py      # Inline keyboards
-│   └── messages.py       # Message templates
+│   ├── messages.py       # Message templates
+│   └── utils.py          # Markdown escaping, formatting, safe sending
 ├── database/
 │   ├── __init__.py
 │   └── client.py         # MongoDB client wrapper
+├── dex/
+│   └── solana.py         # Birdeye API client (Solana DEX trades & wallets)
 ├── exchanges/
 │   ├── __init__.py
-│   └── client.py         # Exchange API wrapper (CCXT)
+│   ├── client.py         # Exchange API wrapper (CCXT) with short ticker cache
+│   └── websocket_client.py  # Order book streams ("Sniper Mode": Binance + MEXC)
 ├── monitoring/
 │   ├── __init__.py
+│   ├── broadcaster.py    # Delivers alerts (prefs, bans, watchlists, blocked users)
+│   ├── dex_tracker.py    # Solana big-buy / demand alerts
 │   └── tracker.py        # Spike detection & alerts
+├── tests/                # Unit tests (pytest)
 ├── config.py             # Configuration management
 ├── main.py               # Application entry point
 ├── requirements.txt      # All dependencies
@@ -120,9 +127,17 @@ MAX_SPIKE_THRESHOLD=70           # Alert on gains up to 70%
 # Exchanges to Monitor
 EXCHANGES=binance,bybit,mexc,bitget,gateio
 
+# Admins (comma-separated Telegram user IDs)
+ADMIN_USER_IDS=123456789
+
+# Solana DEX tracking - only runs when an API key is set
+BIRDEYE_API_KEY=your_birdeye_key
+
 # Environment
 ENVIRONMENT=development          # or 'production'
 ```
+
+See `.env.example` for every available option.
 
 ### 5. Get Telegram Bot Token
 
@@ -136,6 +151,13 @@ ENVIRONMENT=development          # or 'production'
 ```bash
 # Make sure venv is activated
 python main.py
+```
+
+Run the unit tests (no Telegram or MongoDB needed):
+
+```bash
+pip install pytest
+python -m pytest
 ```
 
 You should see:

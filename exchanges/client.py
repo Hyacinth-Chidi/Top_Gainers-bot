@@ -1,5 +1,6 @@
 import ccxt
 import asyncio
+import time
 from typing import List, Dict, Optional
 from datetime import datetime
 from config import config
@@ -50,8 +51,16 @@ class ExchangeClient:
         },
     }
     
+    # How long fetched tickers are reused (seconds). The tracker asks for
+    # gainers and losers back-to-back, and users often hit the same data.
+    TICKER_CACHE_TTL = 20
+    
     def __init__(self):
         self.exchanges = {}
+        # exchange_name -> (fetched_at_monotonic, processed_tickers)
+        self._ticker_cache: Dict[str, tuple] = {}
+        # One lock per exchange so concurrent callers share a single fetch
+        self._fetch_locks: Dict[str, asyncio.Lock] = {}
         self._initialize_exchanges()
     
     def _initialize_exchanges(self):
@@ -80,10 +89,23 @@ class ExchangeClient:
         return links.get(exchange, "")
 
     async def _fetch_exchange_tickers(self, exchange_name: str) -> List[Dict]:
-        """Fetch and process tickers from an exchange (internal helper)"""
+        """Return processed tickers for an exchange, served from a short-lived cache"""
         if exchange_name not in self.exchanges:
             return []
+        
+        lock = self._fetch_locks.setdefault(exchange_name, asyncio.Lock())
+        async with lock:
+            cached = self._ticker_cache.get(exchange_name)
+            if cached and time.monotonic() - cached[0] < self.TICKER_CACHE_TTL:
+                return list(cached[1])
             
+            tickers = await self._fetch_exchange_tickers_uncached(exchange_name)
+            if tickers:
+                self._ticker_cache[exchange_name] = (time.monotonic(), tickers)
+            return list(tickers)
+
+    async def _fetch_exchange_tickers_uncached(self, exchange_name: str) -> List[Dict]:
+        """Fetch and process tickers from an exchange (internal helper)"""
         exchange = self.exchanges[exchange_name]
         try:
             # Prepare params
@@ -146,7 +168,7 @@ class ExchangeClient:
                         'timestamp': datetime.utcnow(),
                         'url': self._generate_trade_link(exchange_name, clean_symbol)
                     })
-                except:
+                except Exception:
                     continue
             
             return processed
@@ -224,7 +246,7 @@ class ExchangeClient:
                             'timestamp': datetime.utcnow(),
                             'url': self._generate_trade_link(exchange_name, symbol)
                         }
-                except:
+                except Exception:
                     continue
             
             return None
@@ -236,5 +258,8 @@ class ExchangeClient:
     def close_all(self):
         """Close all exchange connections"""
         for exchange in self.exchanges.values():
-            if hasattr(exchange, 'close'):
-                exchange.close()
+            try:
+                if hasattr(exchange, 'close'):
+                    exchange.close()
+            except Exception:
+                pass

@@ -1,5 +1,5 @@
 import asyncio
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from database.client import DatabaseClient
 
 from config import config
@@ -36,10 +36,12 @@ class TopGainersBot:
         self.monitoring_task = asyncio.create_task(self.spike_tracker.start())
         
         # Initialize DEX tracker (Solana) if enabled
-        if config.DEX_ENABLED:
+        if config.DEX_ENABLED and config.BIRDEYE_API_KEY:
             self.dex_tracker = DexTracker(application.bot, self.db)
             self.dex_task = asyncio.create_task(self.dex_tracker.start())
             print("🌐 DEX Tracking: ENABLED (Solana)")
+        elif config.DEX_ENABLED:
+            print("🌐 DEX Tracking: DISABLED - set BIRDEYE_API_KEY to enable (free key at https://birdeye.so/)")
         else:
             print("🌐 DEX Tracking: DISABLED")
         
@@ -82,6 +84,10 @@ class TopGainersBot:
         
         print("✓ Shutdown complete")
     
+    async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Log errors raised while handling updates"""
+        print(f"⚠️ Error handling update: {context.error}")
+    
     def run(self):
         """Build and run the bot"""
         print("🚀 Starting Top Gainers Bot...")
@@ -114,6 +120,9 @@ class TopGainersBot:
         
         # Register callback query handler for buttons
         self.application.add_handler(CallbackQueryHandler(handlers.button_callback))
+        
+        # Log unexpected handler errors instead of failing silently
+        self.application.add_error_handler(self.error_handler)
         
         print("✓ Registered command handlers")
         

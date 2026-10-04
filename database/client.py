@@ -1,7 +1,28 @@
 from motor.motor_asyncio import AsyncIOMotorClient
-from datetime import datetime
-from typing import Optional, List, Dict
+from datetime import datetime, timedelta
+from typing import Optional, List, Dict, Set
 from config import config
+
+# Default alert type preferences (single source of truth)
+DEFAULT_ALERT_TYPES = {
+    "early_pumps": True,      # 🔮 Early pump signals (score-based)
+    "confirmed_pumps": True,  # 🚀 Confirmed pumps (+5% in 5m)
+    "dumps": True,            # 💥 Dump alerts (-5% in 5m)
+    "daily_spikes": True,     # 🔥 Daily gainers (+30-70%)
+    "daily_dumps": False,     # 📉 Daily losers (off by default)
+    "dex_alerts": True,       # 🌐 Solana DEX big buys / demand
+}
+
+ALL_EXCHANGES = ["binance", "bybit", "mexc", "bitget", "gateio"]
+
+
+def normalize_symbol(symbol: str) -> str:
+    """Normalize a symbol to the BTCUSDT form used across the bot"""
+    symbol = symbol.upper().strip().replace("/USDT", "").replace("-USDT", "").replace("_USDT", "")
+    if not symbol.endswith("USDT"):
+        symbol = f"{symbol}USDT"
+    return symbol
+
 
 class DatabaseClient:
     """MongoDB client for user and alert data management"""
@@ -128,19 +149,12 @@ class DatabaseClient:
         """Create default preferences for user"""
         default_prefs = {
             "user_id": user_id,
-            "preferred_exchanges": ["binance", "bybit", "mexc", "bitget", "gateio"],
-            "alert_exchanges": ["binance", "bybit", "mexc", "bitget", "gateio"],
+            "preferred_exchanges": list(ALL_EXCHANGES),
+            "alert_exchanges": list(ALL_EXCHANGES),
             "default_top_count": 10,
             "min_alert_threshold": 30,
             "max_alert_threshold": 70,
-            # Alert type preferences (default ON except daily_dumps)
-            "alert_types": {
-                "early_pumps": True,      # 🔮 Early pump signals (score-based)
-                "confirmed_pumps": True,  # 🚀 Confirmed pumps (+5% in 5m)
-                "dumps": True,            # 💥 Dump alerts (-5% in 5m)
-                "daily_spikes": True,     # 🔥 Daily gainers (+30-70%)
-                "daily_dumps": False      # 📉 Daily losers (off by default)
-            }
+            "alert_types": dict(DEFAULT_ALERT_TYPES)
         }
         
         await self.user_preferences.update_one(
@@ -165,15 +179,11 @@ class DatabaseClient:
             prefs = await self.get_user_preferences(user_id)
         
         # Get current alert_types or use defaults
-        alert_types = prefs.get("alert_types", {
-            "early_pumps": True,
-            "confirmed_pumps": True,
-            "dumps": True,
-            "daily_spikes": True,
-            "daily_dumps": False
-        })
+        alert_types = {**DEFAULT_ALERT_TYPES, **prefs.get("alert_types", {})}
         
         # Toggle the specific type
+        if alert_type not in DEFAULT_ALERT_TYPES:
+            return alert_types.get(alert_type, False)
         current_state = alert_types.get(alert_type, False)
         new_state = not current_state
         alert_types[alert_type] = new_state
@@ -190,34 +200,39 @@ class DatabaseClient:
     async def get_user_alert_types(self, user_id: int) -> Dict:
         """Get user's alert type preferences"""
         prefs = await self.get_user_preferences(user_id)
-        if prefs and "alert_types" in prefs:
-            return prefs["alert_types"]
-        
-        # Return defaults
-        return {
-            "early_pumps": True,
-            "confirmed_pumps": True,
-            "dumps": True,
-            "daily_spikes": True,
-            "daily_dumps": False
-        }
+        stored = prefs.get("alert_types", {}) if prefs else {}
+        # Merge so newly added alert types get their default value
+        return {**DEFAULT_ALERT_TYPES, **stored}
     
     # Alert history operations
-    async def save_alert(self, symbol: str, exchange: str, percent_gain: float):
+    async def save_alert(self, symbol: str, exchange: str, percent_gain: float,
+                         alert_type: Optional[str] = None):
         """Save alert to history"""
         alert = {
             "symbol": symbol,
             "exchange": exchange,
             "percent_gain": percent_gain,
+            "alert_type": alert_type,
             "alerted_at": datetime.utcnow()
         }
         
         await self.alert_history.insert_one(alert)
     
+    async def has_recent_alert(self, symbol: str, exchange: str, hours: float = 1,
+                               alert_type: Optional[str] = None) -> bool:
+        """Check whether a symbol/exchange pair (optionally of one alert type) was alerted recently"""
+        cutoff = datetime.utcnow() - timedelta(hours=hours)
+        query = {
+            "symbol": symbol,
+            "exchange": exchange,
+            "alerted_at": {"$gte": cutoff}
+        }
+        if alert_type:
+            query["alert_type"] = alert_type
+        return await self.alert_history.find_one(query, {"_id": 1}) is not None
+    
     async def get_recent_alerts(self, symbol: str, exchange: str, hours: int = 1) -> List[Dict]:
         """Get recent alerts for a symbol/exchange pair"""
-        from datetime import timedelta
-        
         cutoff = datetime.utcnow() - timedelta(hours=hours)
         
         cursor = self.alert_history.find({
@@ -261,10 +276,7 @@ class DatabaseClient:
     
     async def add_to_watchlist(self, user_id: int, symbol: str) -> bool:
         """Add a symbol to user's watchlist. Returns True if added, False if already exists."""
-        # Normalize symbol (uppercase, remove common suffixes)
-        symbol = symbol.upper().replace("/USDT", "").replace("-USDT", "")
-        if not symbol.endswith("USDT"):
-            symbol = f"{symbol}USDT"
+        symbol = normalize_symbol(symbol)
         
         # Check if already in watchlist
         current = await self.get_user_watchlist(user_id)
@@ -281,10 +293,7 @@ class DatabaseClient:
     
     async def remove_from_watchlist(self, user_id: int, symbol: str) -> bool:
         """Remove a symbol from user's watchlist. Returns True if removed, False if not found."""
-        # Normalize symbol
-        symbol = symbol.upper().replace("/USDT", "").replace("-USDT", "")
-        if not symbol.endswith("USDT"):
-            symbol = f"{symbol}USDT"
+        symbol = normalize_symbol(symbol)
         
         # Check if in watchlist
         current = await self.get_user_watchlist(user_id)
@@ -312,20 +321,14 @@ class DatabaseClient:
     
     async def is_in_watchlist(self, user_id: int, symbol: str) -> bool:
         """Check if a symbol is in user's watchlist"""
-        # Normalize symbol
-        symbol = symbol.upper().replace("/USDT", "").replace("-USDT", "")
-        if not symbol.endswith("USDT"):
-            symbol = f"{symbol}USDT"
+        symbol = normalize_symbol(symbol)
         
         current = await self.get_user_watchlist(user_id)
         return symbol in current
     
     async def get_watchlist_users_for_symbol(self, symbol: str) -> List[int]:
         """Get all user IDs who have this symbol in their watchlist"""
-        # Normalize symbol
-        symbol = symbol.upper().replace("/USDT", "").replace("-USDT", "")
-        if not symbol.endswith("USDT"):
-            symbol = f"{symbol}USDT"
+        symbol = normalize_symbol(symbol)
         
         cursor = self.watchlists.find({"symbols": symbol})
         docs = await cursor.to_list(length=None)
@@ -356,6 +359,22 @@ class DatabaseClient:
         doc = await self.banned_users.find_one({"user_id": user_id})
         return doc is not None
     
+    async def get_banned_user_ids(self) -> Set[int]:
+        """Get the set of banned user IDs (one query instead of one per user)"""
+        cursor = self.banned_users.find({}, {"user_id": 1})
+        docs = await cursor.to_list(length=None)
+        return {doc["user_id"] for doc in docs}
+    
+    async def get_watchlists_by_symbol(self) -> Dict[str, Set[int]]:
+        """Map each watched symbol to the set of user IDs watching it"""
+        cursor = self.watchlists.find({"symbols.0": {"$exists": True}})
+        docs = await cursor.to_list(length=None)
+        result: Dict[str, Set[int]] = {}
+        for doc in docs:
+            for symbol in doc.get("symbols", []):
+                result.setdefault(symbol, set()).add(doc["user_id"])
+        return result
+    
     async def get_banned_users(self) -> List[Dict]:
         """Get all banned users"""
         cursor = self.banned_users.find({})
@@ -372,7 +391,6 @@ class DatabaseClient:
     
     async def get_active_users_count(self, hours: int = 24) -> int:
         """Get count of users active in last N hours"""
-        from datetime import timedelta
         cutoff = datetime.utcnow() - timedelta(hours=hours)
         return await self.users.count_documents({"last_active": {"$gte": cutoff}})
     
