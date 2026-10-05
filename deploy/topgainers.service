@@ -1,0 +1,31 @@
+# systemd service for Top Gainers Bot
+# Install: sudo cp deploy/topgainers.service /etc/systemd/system/
+# See DEPLOYMENT.md for the full setup.
+
+[Unit]
+Description=Top Gainers Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=topgainers
+Group=topgainers
+WorkingDirectory=/var/www/top-gainers-bot
+ExecStart=/var/www/top-gainers-bot/venv/bin/python main.py
+
+# Show print() output in the logs immediately (journalctl)
+Environment=PYTHONUNBUFFERED=1
+
+# Restart automatically if it crashes or the VPS reboots
+Restart=always
+RestartSec=10
+
+# Basic hardening: the bot only needs to read its own folder
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

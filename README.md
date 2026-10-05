@@ -62,6 +62,7 @@ top-gainers-bot/
 │   ├── broadcaster.py       # Delivers alerts (prefs, bans, watchlists, rate limits)
 │   ├── dex_tracker.py       # Solana big-buy / demand alerts
 │   └── tracker.py           # Pump, dump & early-signal detection
+├── deploy/                  # VPS service file and update script (see DEPLOYMENT.md)
 ├── tests/                   # Unit tests (pytest)
 ├── config.py                # Configuration from environment variables
 ├── main.py                  # Application entry point
@@ -255,41 +256,9 @@ Set the environment variables in the Railway dashboard.
 3. Start command: `python main.py`
 4. Set the environment variables in the dashboard
 
-### VPS (DigitalOcean, AWS, etc.)
+### VPS (DigitalOcean, AWS, Hetzner, etc.)
 
-```bash
-git clone <your_repo_url>
-cd top-gainers-bot
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env && nano .env
-```
-
-Create `/etc/systemd/system/topgainers.service`:
-```ini
-[Unit]
-Description=Top Gainers Bot
-After=network.target
-
-[Service]
-Type=simple
-User=your_user
-WorkingDirectory=/path/to/top-gainers-bot
-ExecStart=/path/to/top-gainers-bot/venv/bin/python main.py
-Restart=on-failure
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Then:
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now topgainers
-journalctl -u topgainers -f   # follow the logs
-```
+See **[DEPLOYMENT.md](DEPLOYMENT.md)** for a step-by-step guide: installing in `/var/www/top-gainers-bot`, running as a systemd service that starts on boot, viewing logs, and one-command updates with `deploy/update.sh`.
 
 ## Troubleshooting
 
