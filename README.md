@@ -15,7 +15,7 @@ A Telegram bot that tracks USDT perpetual futures across major crypto exchanges,
 
 ## How Alerts Work
 
-The bot scans every exchange every `SPIKE_CHECK_INTERVAL` seconds (60 by default) and keeps a short price history in memory.
+The bot scans every exchange every `SPIKE_CHECK_INTERVAL` seconds (60 by default) and checks **every** active USDT perpetual, not just the day's top movers, so a coin that is flat on the day and suddenly moves is still caught. It keeps a short price history in memory.
 
 | Alert | Trigger | Repeats |
 |---|---|---|
@@ -28,7 +28,7 @@ The bot scans every exchange every `SPIKE_CHECK_INTERVAL` seconds (60 by default
 | 🌐 DEX demand | ≥ 10 buyers and twice as many buyers as sellers | At most every 2h per token |
 
 - **Pump and dump alerts are never held back** by other alerts for the same coin, because timing matters. A daily alert is skipped if the coin was alerted for any reason in the last 30 minutes.
-- **Order book "Sniper Mode"**: when a coin scores 20–49, the bot subscribes to its live order book (Binance and MEXC) so buy pressure counts toward the next score.
+- **Order book "Sniper Mode"**: when a coin scores 20–49 and is moving right now, the bot subscribes to its live order book (Binance and MEXC) so buy pressure counts toward the next score.
 - **Delivery**: alerts are sent in parallel batches of 25 per second, just under Telegram's limit. People who have the coin on their watchlist get it first.
 - **Alerts are off by default.** Users switch them on with `/alerts`. Users who block the bot have their alerts switched off automatically.
 

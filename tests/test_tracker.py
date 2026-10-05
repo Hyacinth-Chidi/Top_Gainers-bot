@@ -144,3 +144,38 @@ def test_daily_alert_held_back_after_recent_pump():
     _seed_price(tracker, 1.40)
     asyncio.run(tracker._process_coin(_coin(1.40, change_24h=40.0)))
     assert [a[2] for a in db.saved_alerts] == ["confirmed_pumps"]
+
+
+def test_scan_covers_coins_outside_daily_top_movers():
+    """A coin flat on the day that suddenly pumps must still be alerted"""
+    import monitoring.tracker as tracker_mod
+
+    class Feed:
+        price = 1.0
+        async def get_all_tickers(self, exchange):
+            # 200 coins with bigger daily moves crowd QUIET out of any top-N list
+            coins = [{"symbol": f"BIG{i}USDT", "exchange": exchange, "price": 1.0,
+                      "change_24h": 20.0 if i % 2 else -20.0, "volume_24h": 1e6, "url": ""}
+                     for i in range(200)]
+            coins.append({"symbol": "QUIETUSDT", "exchange": exchange, "price": self.price,
+                          "change_24h": 1.0, "volume_24h": 1e6, "url": ""})
+            return coins
+        def _generate_trade_link(self, exchange, symbol):
+            return ""
+
+    feed = Feed()
+    db = FakeDB(users=[user(1)])
+    tracker = SpikeTracker(feed, FakeBot(), db)
+    tracker.broadcaster.BATCH_INTERVAL = 0
+    original = tracker_mod.config.EXCHANGES
+    tracker_mod.config.EXCHANGES = ["binance"]
+    try:
+        tracker.price_history["QUIETUSDT:binance"] = [
+            (1.0, datetime.utcnow() - timedelta(minutes=6))
+        ]
+        feed.price = 1.07
+        asyncio.run(tracker._check_all_exchanges())
+    finally:
+        tracker_mod.config.EXCHANGES = original
+
+    assert ("QUIETUSDT", "binance", "confirmed_pumps") in db.saved_alerts

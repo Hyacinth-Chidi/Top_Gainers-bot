@@ -121,7 +121,7 @@ class SpikeTracker:
 
         # Fetch all exchanges concurrently; process sequentially
         results = await asyncio.gather(
-            *(self._fetch_movers(name) for name in config.EXCHANGES),
+            *(self.exchange_client.get_all_tickers(name) for name in config.EXCHANGES),
             return_exceptions=True
         )
 
@@ -129,25 +129,16 @@ class SpikeTracker:
             if isinstance(coins, Exception):
                 print(f"Error checking {exchange_name}: {coins}")
                 continue
+            # Every active pair is checked, not just today's top movers: a coin
+            # that is flat on the day and suddenly pumps or dumps is exactly
+            # what the 5-minute alerts exist for.
             for coin in coins:
                 try:
                     await self._process_coin(coin)
                 except Exception as e:
                     print(f"Error processing {coin.get('symbol')} on {exchange_name}: {e}")
-
-    async def _fetch_movers(self, exchange_name: str) -> List[Dict]:
-        """Top gainers and losers for an exchange, de-duplicated"""
-        # Both calls share one cached ticker fetch
-        gainers = await self.exchange_client.get_top_gainers(exchange_name, limit=50)
-        losers = await self.exchange_client.get_top_losers(exchange_name, limit=30)
-
-        seen = set()
-        unique_coins = []
-        for coin in gainers + losers:
-            if coin['symbol'] not in seen:
-                seen.add(coin['symbol'])
-                unique_coins.append(coin)
-        return unique_coins
+            # Let Telegram commands run between exchanges
+            await asyncio.sleep(0)
 
     async def _process_coin(self, coin: Dict):
         """Update history for one coin and send any alerts it triggers"""
@@ -260,20 +251,21 @@ class SpikeTracker:
     async def _calculate_pump_score(self, cache_key: str, volume: float, change_24h: float,
                                     volatility_change: float) -> int:
         """Calculate pump probability score based on multiple factors"""
-        score = 0
         symbol, exchange = cache_key.split(":", 1)
 
+        # Short-term factors: what is happening right now
         # Factor 1: Volume Spike (30 points)
-        score += self._get_volume_spike_score(cache_key)
+        short_term = self._get_volume_spike_score(cache_key)
 
         # Factor 2: Momentum - consecutive gains (25 points)
-        score += self._get_momentum_score(cache_key)
+        short_term += self._get_momentum_score(cache_key)
 
         # Factor 3: Short-term volatility (25 points)
         if volatility_change >= 3.0:  # 3%+ gain in 5 mins
-            score += self.SCORE_VOLATILITY
+            short_term += self.SCORE_VOLATILITY
         elif volatility_change >= 1.5:  # 1.5%+ gain
-            score += int(self.SCORE_VOLATILITY * 0.5)
+            short_term += int(self.SCORE_VOLATILITY * 0.5)
+        score = short_term
 
         # Factor 4: Daily trend already positive (20 points)
         if change_24h >= 10:  # Already up 10%+ today
@@ -289,9 +281,11 @@ class SpikeTracker:
             score += self.SCORE_ORDER_BOOK
 
         # --- SNIPER MODE TRIGGER ---
-        # If score is promising but not yet an alert (e.g. 20-49),
-        # subscribe to WebSocket to get that Order Book boost for next check!
-        if 20 <= score < self.MIN_PUMP_SCORE and self.ws_client.supports(exchange):
+        # If score is promising but not yet an alert (e.g. 20-49), and something
+        # is actually moving now (a big daily gain alone isn't enough), subscribe
+        # to the order book to get that boost for the next check
+        if (20 <= score < self.MIN_PUMP_SCORE and short_term > 0
+                and self.ws_client.supports(exchange)):
             if cache_key not in self.active_subscriptions:
                 asyncio.create_task(self.ws_client.subscribe_order_book(exchange, symbol))
             # Add or refresh, keeping the subscription alive
