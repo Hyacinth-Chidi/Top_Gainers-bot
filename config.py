@@ -25,6 +25,10 @@ class Config:
         if e.strip()
     ]
     
+    # How many days of alert history to keep (older alerts are deleted
+    # automatically; only the last 12h are needed for cooldowns)
+    ALERT_HISTORY_DAYS = max(1.0, float(os.getenv("ALERT_HISTORY_DAYS", 7)))
+    
     # Bybit regional endpoint
     # Options: "bybit.com" (global), "bybit.us" (US), "bybit.eu" (EU)
     BYBIT_HOSTNAME = os.getenv("BYBIT_HOSTNAME", "bybit.com")

@@ -1,4 +1,5 @@
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo.errors import OperationFailure
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Set
 from config import config
@@ -36,6 +37,7 @@ class DatabaseClient:
         self.user_preferences = None
         self.price_snapshots = None
         self.alert_history = None
+        self.counters = None
         self.watchlists = None
         self.banned_users = None  # Admin: banned users
     
@@ -50,6 +52,7 @@ class DatabaseClient:
             self.user_preferences = self.db.user_preferences
             self.price_snapshots = self.db.price_snapshots
             self.alert_history = self.db.alert_history
+            self.counters = self.db.counters
             self.watchlists = self.db.watchlists
             self.banned_users = self.db.banned_users  # Admin: banned users
             
@@ -77,12 +80,40 @@ class DatabaseClient:
         
         # Alert history indexes
         await self.alert_history.create_index([("symbol", 1), ("exchange", 1), ("alerted_at", -1)])
+        await self._ensure_alert_history_ttl()
         
         # Watchlist indexes
         await self.watchlists.create_index("user_id", unique=True)
         
         # Banned users indexes
         await self.banned_users.create_index("user_id", unique=True)
+    
+    async def _ensure_alert_history_ttl(self):
+        """
+        Let MongoDB delete old alerts automatically. History is only needed
+        for cooldowns (at most 12h), so the collection stays small.
+        """
+        ttl_seconds = int(config.ALERT_HISTORY_DAYS * 86400)
+        try:
+            await self.alert_history.create_index(
+                "alerted_at", name="alerted_at_ttl", expireAfterSeconds=ttl_seconds
+            )
+        except OperationFailure:
+            # Index exists with a different retention - update it in place
+            await self.db.command({
+                "collMod": "alert_history",
+                "index": {"name": "alerted_at_ttl", "expireAfterSeconds": ttl_seconds},
+            })
+        
+        # Keep the all-time total in a counter, since old alerts get deleted.
+        # The first time, start it from the alerts already stored.
+        if not await self.counters.find_one({"_id": "alerts_sent"}):
+            existing = await self.alert_history.count_documents({})
+            await self.counters.update_one(
+                {"_id": "alerts_sent"},
+                {"$setOnInsert": {"count": existing}},
+                upsert=True
+            )
     
     async def disconnect(self):
         """Disconnect from MongoDB"""
@@ -217,6 +248,9 @@ class DatabaseClient:
         }
         
         await self.alert_history.insert_one(alert)
+        await self.counters.update_one(
+            {"_id": "alerts_sent"}, {"$inc": {"count": 1}}, upsert=True
+        )
     
     async def has_recent_alert(self, symbol: str, exchange: str, hours: float = 1,
                                alert_type: Optional[str] = None) -> bool:
@@ -399,7 +433,8 @@ class DatabaseClient:
         total_users = await self.get_user_count()
         active_24h = await self.get_active_users_count(24)
         alerts_enabled = await self.users.count_documents({"alerts_enabled": True})
-        alerts_sent = await self.alert_history.count_documents({})
+        counter = await self.counters.find_one({"_id": "alerts_sent"})
+        alerts_sent = counter.get("count", 0) if counter else 0
         banned_count = await self.banned_users.count_documents({})
         
         # Get watchlist stats

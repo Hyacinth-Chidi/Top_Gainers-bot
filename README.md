@@ -156,7 +156,7 @@ python main.py
 Run the unit tests (no Telegram or MongoDB needed):
 
 ```bash
-pip install pytest
+pip install pytest mongomock-motor
 python -m pytest
 ```
 
