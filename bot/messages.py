@@ -1,265 +1,278 @@
-from typing import List, Dict
+from datetime import datetime
+from typing import List, Dict, Optional
 
 from config import config
-from .utils import md_bold, format_price, format_volume
+from .utils import md_bold, escape_md, format_price, format_volume
 
-# Telegram's legacy Markdown uses *bold* and _italic_ (single characters)
+# Telegram's legacy Markdown uses *bold* and _italic_ (single characters).
+#
+# Alerts put the coin and the move on the FIRST line: that is the only line
+# shown in a phone notification, so people can decide at a glance.
 
 _MIN = int(config.MIN_SPIKE_THRESHOLD)
 _MAX = int(config.MAX_SPIKE_THRESHOLD)
+_DEX_ON = bool(config.DEX_ENABLED and config.BIRDEYE_API_KEY)
+
+EXCHANGE_NAMES = {
+    "binance": "Binance",
+    "bybit": "Bybit",
+    "mexc": "MEXC",
+    "bitget": "Bitget",
+    "gateio": "Gate.io",
+    "all": "All exchanges",
+}
+
+DISCLAIMER = "_Not financial advice. Always do your own research._"
+
+
+def exchange_name(exchange: str) -> str:
+    return EXCHANGE_NAMES.get(exchange.lower(), exchange.upper())
+
+
+def _pct(value: float) -> str:
+    """+6.12% / −3.40% (proper minus sign)"""
+    return f"+{value:.2f}%" if value >= 0 else f"−{abs(value):.2f}%"
 
 
 class BotMessages:
     """Message templates for the bot"""
 
-    WELCOME = """
-👋 *Welcome to Top Gainers Bot!*
+    # ==================== ONBOARDING ====================
 
-I track the crypto futures market to find the best trading opportunities for you. 🚀
+    @staticmethod
+    def welcome(first_name: Optional[str], returning: bool = False) -> str:
+        name = escape_md(first_name) if first_name else "there"
+        if returning:
+            return (
+                f"👋 Welcome back, {name}!\n\n"
+                "What would you like to check?"
+            )
+        dex_line = "🌐 Spot whale buys on Solana DEXs\n" if _DEX_ON else ""
+        return (
+            f"👋 Hi {name}, welcome to *Top Gainers Bot*!\n\n"
+            "I watch crypto futures on Binance, Bybit, MEXC, Bitget and Gate.io "
+            "around the clock and message you the moment something moves.\n\n"
+            "*What I can do*\n"
+            "📈 Show today's top gainers and losers\n"
+            "🚀 Alert you to pumps and dumps within a minute\n"
+            f"{dex_line}"
+            "⭐ Keep an eye on your favourite coins\n\n"
+            "*Get started*\n"
+            "1. Tap 🔔 *Alerts* below\n"
+            "2. Turn alerts on\n\n"
+            "Alerts stay off until you switch them on."
+        )
 
-🔔 *Important:* Alerts are *OFF* by default.
-To start receiving real-time Pump & Dump alerts, click "🔔 Alerts" below and enable them!
+    HELP = (
+        "📖 *How to use Top Gainers Bot*\n\n"
+        "*Market lists*\n"
+        "/gainers - today's biggest risers\n"
+        "/losers - today's biggest fallers\n\n"
+        "*Alerts*\n"
+        "/alerts - turn alerts on or off and choose what you get\n"
+        "🔮 Early pump - signs a pump may be starting\n"
+        "🚀 Pump / 💥 Dump - a move of 5% or more within 5 minutes\n"
+        f"🔥 Daily gainer / 📉 Daily loser - {_MIN}% to {_MAX}% up or down today\n"
+        + ("🌐 DEX - big and whale buys on Solana\n" if _DEX_ON else "")
+        + "\n*Watchlist*\n"
+        "/watchlist - see your coins\n"
+        "`/watchlist add BTC` - add a coin\n"
+        "`/watchlist remove BTC` - remove a coin\n"
+        "⭐ Alerts for your coins are starred and reach you from every exchange.\n\n"
+        "Every alert has a link that opens the coin on the exchange.\n\n"
+        f"{DISCLAIMER}"
+    )
 
-🎯 *What I Do:*
-• 📈 *Gainers*: Top 5/10/20 winners
-• 📉 *Losers*: Top 5/10/20 dippers (buy the dip!)
-• 📝 *Watchlist*: Track your favorite coins
-• 🔮 *Early Pump Signals*: Multi-factor pump detection
-• ⚡ *Pump Alerts*: Price pumps 5%+ in 5 mins
-• 💥 *Dump Alerts*: Price drops 5%+ in 5 mins
-• 🛡️ *Exchange Filter*: You choose which exchanges to track
+    UNKNOWN = (
+        "🤔 Sorry, I didn't catch that.\n\n"
+        "Use the buttons below, or /help to see everything I can do."
+    )
 
-📊 *Exchanges Supported:*
-🟡 Binance • 🔷 Bybit • 🟢 MEXC • 🔵 Bitget • 🟣 Gate.io
+    # ==================== MARKET LISTS ====================
 
-👇 *Click a button below to start:*
-"""
-
-    HELP = f"""
-🆘 *Top Gainers Bot Help*
-
-I help you catch pumps, dumps, and trade volatility on major futures exchanges.
-
-✨ *Main Commands:*
-• /gainers - View top rising coins 📈
-• /losers - View top falling coins 📉
-• /watchlist - Manage your watchlist 📝
-• /alerts - Configure your notifications 🔔
-
-📝 *Watchlist Commands:*
-• `/watchlist` - View your list
-• `/watchlist add BTC` - Add a coin
-• `/watchlist remove BTC` - Remove a coin
-• `/watchlist clear` - Clear all
-
-⚡ *About Alerts:*
-I watch the market 24/7 and notify you when:
-1. *Early Pump Signal*: Volume, momentum & order book point to a pump 🔮
-2. *Pump Alert*: A coin pumps >5% in 5 minutes 🚀
-3. *Dump Alert*: A coin drops >5% in 5 minutes 💥
-4. *Daily Gainer*: A coin hits +{_MIN}% to +{_MAX}% on the day 🔥
-5. *Daily Loser*: A coin drops -{_MIN}% to -{_MAX}% on the day 📉
-6. *DEX Alerts*: Big buys and demand spikes on Solana 🌐
-
-⭐ Coins on your watchlist are flagged in alerts and always reach you, even from exchanges you filtered out.
-
-🛠️ *Settings:*
-Use /alerts → "Alert Types" and "Filter Exchanges" to tune what you receive.
-
-💡 *Pro Tip:*
-All alerts contain *Direct Trading Links*. Click the link to open the futures pair immediately!
-
-_Questions? Feedback? Contact the developer._
-"""
+    SELECT_EXCHANGE = "🏦 *Which exchange?*"
+    SELECT_COUNT = "🔢 *How many coins?*"
+    LOADING = "⏳ Fetching the latest prices..."
 
     @staticmethod
     def format_gainers_list(gainers: List[Dict], exchange: str, count: int, title: str = "Gainers") -> str:
-        """Format list of coins into readable message"""
+        """Format a list of coins: two compact lines per coin"""
+        where = exchange_name(exchange)
         if not gainers:
-            where = "any exchange" if exchange == "all" else exchange.upper()
-            return f"❌ No {title.lower()} found on {where} right now. Please try again shortly."
+            return (
+                f"😕 I couldn't load {title.lower()} from {where} right now.\n\n"
+                "The exchange may be busy. Please try again in a minute."
+            )
 
-        where = "All Exchanges" if exchange == "all" else exchange.upper()
-        lines = [f"*Top {count} {title} - {where}*", ""]
+        icon = "📈" if title == "Gainers" else "📉"
+        updated = datetime.utcnow().strftime("%d %b, %H:%M UTC")
+        lines = [f"{icon} *Top {count} {title}* · {where}", f"_{updated}_", ""]
 
         for i, coin in enumerate(gainers, 1):
-            emoji = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
-
-            exch = coin['exchange'].upper()
-            change = coin['change_24h']
-            sign = "+" if change > 0 else ""
+            rank = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
+            exch = exchange_name(coin['exchange'])
             url = coin.get('url', '')
+            venue = f"[{exch}]({url})" if url else exch
 
-            line = f"{emoji} {md_bold(coin['symbol'])} ({exch})\n"
-            line += f"   💰 {format_price(coin['price'])}\n"
-            line += f"   📊 {sign}{change:.2f}%\n"
-            line += f"   📈 Vol: {format_volume(coin['volume_24h'])}"
-            if url:
-                line += f"\n   🔗 [Trade on {exch}]({url})"
+            lines.append(f"{rank} {md_bold(coin['symbol'])}  {_pct(coin['change_24h'])}")
+            lines.append(
+                f"      {format_price(coin['price'])} · Vol {format_volume(coin['volume_24h'])} · {venue}"
+            )
 
-            lines.append(line)
-
-        lines.append("\n_Updated: Just now_")
-        lines.append("\n💡 Click links to trade immediately!")
-
+        lines.append("")
+        lines.append("Tap an exchange name to open the coin.")
         return "\n".join(lines)
 
+    # ==================== ALERTS ====================
+
     @staticmethod
-    def _alert(header: str, symbol: str, exchange: str, price: float, move_line: str,
-               volume: float, url: str, footer: str) -> str:
-        """Common layout for price alerts"""
-        message = (
-            f"{header}\n\n"
-            f"🪙 {md_bold(symbol)}\n"
-            f"📍 Exchange: {exchange.upper()}\n"
-            f"💰 Price: {format_price(price)}\n"
-            f"{move_line}\n"
-            f"📊 Volume: {format_volume(volume)}\n"
-        )
+    def _alert(headline: str, subtitle: str, price: float, change_24h: Optional[float],
+               volume: float, exchange: str, url: str, extra: str = "") -> str:
+        """Common layout: headline, subtitle, key numbers, link, disclaimer"""
+        stats = f"💰 {format_price(price)}"
+        if change_24h is not None:
+            stats += f"  ·  24h {_pct(change_24h)}"
+        stats += f"  ·  Vol {format_volume(volume)}"
+
+        message = f"{headline}\n_{subtitle}_\n\n{stats}\n"
+        if extra:
+            message += f"{extra}\n"
         if url:
-            message += f"🔗 [Trade Now]({url})\n"
-        message += f"\n{footer}"
+            message += f"\n🔗 [Open on {exchange_name(exchange)}]({url})\n"
+        message += f"\n{DISCLAIMER}"
         return message
 
     @staticmethod
-    def format_spike_alert(symbol: str, exchange: str, price: float, change: float, volume: float, url: str = "") -> str:
-        """Format daily spike alert message"""
+    def format_pump_alert(symbol: str, exchange: str, price: float, change_5m: float,
+                          volume: float, url: str = "", change_24h: Optional[float] = None) -> str:
+        """5-minute pump"""
         return BotMessages._alert(
-            "🔥 *DAILY GAINER ALERT!*", symbol, exchange, price,
-            f"📈 Gain: +{change:.2f}% (24h)", volume, url,
-            "⚡ This coin is running today! DYOR."
+            f"🚀 {md_bold(symbol)} {_pct(change_5m)} in 5 min",
+            f"Pump on {exchange_name(exchange)}",
+            price, change_24h, volume, exchange, url,
         )
 
     @staticmethod
-    def format_pump_alert(symbol: str, exchange: str, price: float, change_5m: float, volume: float, url: str = "") -> str:
-        """Format volatility pump alert message"""
+    def format_dump_alert(symbol: str, exchange: str, price: float, change_5m: float,
+                          volume: float, url: str = "", change_24h: Optional[float] = None) -> str:
+        """5-minute dump"""
         return BotMessages._alert(
-            "🚀 *PUMP DETECTED!*", symbol, exchange, price,
-            f"⚡ *Move: +{change_5m:.2f}% (5m)*", volume, url,
-            "⚠️ High volatility alert! DYOR."
+            f"💥 {md_bold(symbol)} {_pct(change_5m)} in 5 min",
+            f"Dump on {exchange_name(exchange)}",
+            price, change_24h, volume, exchange, url,
         )
 
     @staticmethod
-    def format_early_pump_alert(
-        symbol: str,
-        exchange: str,
-        price: float,
-        change_24h: float,
-        volume: float,
-        pump_score: int,
-        confidence: str,
-        url: str = ""
-    ) -> str:
-        """Format early pump detection alert message"""
+    def format_spike_alert(symbol: str, exchange: str, price: float, change: float,
+                           volume: float, url: str = "") -> str:
+        """Daily gainer"""
+        return BotMessages._alert(
+            f"🔥 {md_bold(symbol)} is up {_pct(change)} today",
+            f"Daily gainer on {exchange_name(exchange)}",
+            price, None, volume, exchange, url,
+        )
+
+    @staticmethod
+    def format_daily_dump_alert(symbol: str, exchange: str, price: float, change_24h: float,
+                                volume: float, url: str = "") -> str:
+        """Daily loser"""
+        return BotMessages._alert(
+            f"📉 {md_bold(symbol)} is down {_pct(change_24h)} today",
+            f"Daily loser on {exchange_name(exchange)}",
+            price, None, volume, exchange, url,
+        )
+
+    @staticmethod
+    def format_early_pump_alert(symbol: str, exchange: str, price: float, change_24h: float,
+                                volume: float, pump_score: int, confidence: str, url: str = "") -> str:
+        """Score-based early pump signal"""
         if confidence == "HIGH":
-            header = "🚨 *HIGH PROBABILITY PUMP*"
+            headline = f"🚨 {md_bold(symbol)} looks ready to pump"
         else:
-            header = "🔮 *POTENTIAL PUMP DETECTED*"
-
-        message = (
-            f"{header}\n\n"
-            f"🪙 {md_bold(symbol)}\n"
-            f"📍 Exchange: {exchange.upper()}\n"
-            f"💰 Price: {format_price(price)}\n"
-            f"📈 24h: {'+' if change_24h >= 0 else ''}{change_24h:.2f}%\n"
-            f"📊 Volume: {format_volume(volume)}\n\n"
-            f"📊 *Pump Score: {pump_score}/100*\n"
-            f"✅ Confidence: {confidence}\n\n"
-            f"_Multi-factor analysis detected unusual activity._\n"
-        )
-        if url:
-            message += f"🔗 [Trade Now]({url})\n"
-        message += "\n⚠️ Early detection signal. DYOR!"
-        return message
-
-    @staticmethod
-    def format_dump_alert(symbol: str, exchange: str, price: float, change_5m: float, volume: float, url: str = "") -> str:
-        """Format volatility dump alert message (5-min crash)"""
+            headline = f"🔮 {md_bold(symbol)} may be starting to pump"
         return BotMessages._alert(
-            "💥 *DUMP DETECTED!*", symbol, exchange, price,
-            f"📉 *Drop: {change_5m:.2f}% (5m)*", volume, url,
-            "⚠️ Sharp drop detected! Check for short opportunities. DYOR."
+            headline,
+            f"Early signal on {exchange_name(exchange)}",
+            price, change_24h, volume, exchange, url,
+            extra=f"📊 Signal strength: *{pump_score}/100* ({confidence.lower()})",
         )
 
-    @staticmethod
-    def format_daily_dump_alert(symbol: str, exchange: str, price: float, change_24h: float, volume: float, url: str = "") -> str:
-        """Format daily dump alert message (24h loser)"""
-        return BotMessages._alert(
-            "📉 *BIG DROP ALERT!*", symbol, exchange, price,
-            f"🔻 Loss: {change_24h:.2f}% (24h)", volume, url,
-            "⚠️ Major daily loser! Potential short or buy-the-dip opportunity. DYOR."
-        )
-
-    ALERTS_ENABLED = """
-✅ *Alerts Enabled!*
-
-You'll now receive real-time pump, dump and early-signal alerts.
-
-Use "🎚️ Alert Types" to choose which alerts you get, and "🛠️ Filter Exchanges" to pick exchanges.
-
-Stay ready for those pumps! 🚀
-"""
-
-    ALERTS_DISABLED = """
-🔕 *Alerts Disabled*
-
-You won't receive alert notifications anymore.
-
-You can re-enable them anytime with /alerts
-"""
-
-    ALERT_TYPES_PROMPT = (
-        "🎚️ *Alert Types*\n\n"
-        "Select which alerts you want to receive:\n\n"
-        "_Toggle each type on or off:_"
-    )
-
-    SELECT_EXCHANGE = "🏦 *Select Exchange*\n\nWhich exchange data would you like to see?"
-    SELECT_COUNT = "🔢 *How many coins?*\n\nSelect the number of results to display:"
-
-    LOADING = "⏳ *Fetching data...* Please wait."
-
-    WATCHLIST_HELP = """
-📋 *Watchlist Commands*
-
-• `/watchlist` - View your watchlist
-• `/watchlist add BTCUSDT` - Add a coin
-• `/watchlist remove BTCUSDT` - Remove a coin
-• `/watchlist clear` - Clear all coins
-
-*Example:*
-`/watchlist add BTC` → Adds BTCUSDT
-`/watchlist add ETH` → Adds ETHUSDT
-"""
+    # ==================== ALERT SETTINGS ====================
 
     @staticmethod
     def alert_status(enabled: bool) -> str:
-        status = "enabled ✅" if enabled else "disabled 🔕"
+        if enabled:
+            return (
+                "🔔 *Alerts are ON* ✅\n\n"
+                "You'll get a message the moment a coin moves on the exchanges you follow.\n\n"
+                "Use the buttons below to choose alert types and exchanges, or switch alerts off."
+            )
         return (
-            f"*Alert Status:* {status}\n\n"
-            "Get notified about early pump signals, 5-minute pumps & dumps, "
-            "and big daily movers.\n\n"
-            "Toggle your alert preference below:"
+            "🔕 *Alerts are OFF*\n\n"
+            "Turn them on to get a message the moment a coin pumps or dumps."
         )
+
+    ALERTS_ENABLED = (
+        "✅ *Alerts are on!*\n\n"
+        "You'll hear from me as soon as something moves.\n\n"
+        "Too many messages? Pick fewer alert types or exchanges below."
+    )
+
+    ALERTS_DISABLED = (
+        "🔕 *Alerts are off.*\n\n"
+        "You won't get alerts until you turn them back on, here or with /alerts."
+    )
+
+    ALERT_TYPES_PROMPT = (
+        "🎚️ *Alert types*\n\n"
+        "Tap to switch each one on ✅ or off ❌."
+    )
+
+    FILTER_EXCHANGES_PROMPT = (
+        "🏦 *Exchanges*\n\n"
+        "Tap to choose which exchanges you get alerts from.\n"
+        "⭐ Alerts for your watchlist coins always come through."
+    )
+
+    # ==================== WATCHLIST ====================
+
+    WATCHLIST_HELP = (
+        "⭐ *Watchlist commands*\n\n"
+        "`/watchlist` - see your coins\n"
+        "`/watchlist add BTC` - add a coin\n"
+        "`/watchlist remove BTC` - remove a coin\n"
+        "`/watchlist clear` - remove all coins\n\n"
+        "`BTC` and `BTCUSDT` both work."
+    )
+
+    WATCHLIST_ADD_PROMPT = (
+        "➕ *Add a coin*\n\n"
+        "Send the command with the coin's symbol, for example:\n"
+        "`/watchlist add BTC`"
+    )
 
     @staticmethod
     def format_watchlist(symbols: list) -> str:
         """Format user's watchlist for display"""
         if not symbols:
-            return """
-📋 *Your Watchlist*
+            return (
+                "⭐ *Your watchlist is empty*\n\n"
+                "Add coins you care about and their alerts will be starred "
+                "and reach you from every exchange.\n\n"
+                "Try: `/watchlist add BTC`"
+            )
 
-_No coins in your watchlist yet._
+        noun = "coin" if len(symbols) == 1 else "coins"
+        lines = [f"⭐ *Your watchlist* ({len(symbols)} {noun})", ""]
+        lines += [f"• `{symbol}`" for symbol in symbols]
+        lines += ["", "Remove one with `/watchlist remove BTC`"]
+        return "\n".join(lines)
 
-Add coins with:
-`/watchlist add BTCUSDT`
-`/watchlist add ETH`
-
-Watchlist coins are flagged ⭐ in alerts and reach you from every exchange!
-"""
-
-        header = f"📋 *Your Watchlist* ({len(symbols)} coins)\n\n"
-        lines = [f"{i}. `{symbol}`" for i, symbol in enumerate(symbols, 1)]
-        footer = "\n\n💡 Use `/watchlist remove SYMBOL` to remove a coin"
-
-        return header + "\n".join(lines) + footer
+    @staticmethod
+    def watchlist_added(symbol: str, alerts_enabled: bool) -> str:
+        message = f"⭐ Added `{symbol}` to your watchlist."
+        if alerts_enabled:
+            message += "\n\nYou'll get a starred alert whenever it moves."
+        else:
+            message += "\n\nTurn on /alerts to get notified when it moves."
+        return message

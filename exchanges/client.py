@@ -177,6 +177,10 @@ class ExchangeClient:
             print(f"Error fetching from {exchange_name}: {e}")
             return []
 
+    async def get_all_tickers(self, exchange_name: str) -> List[Dict]:
+        """All active USDT perpetuals on an exchange (cached briefly)"""
+        return await self._fetch_exchange_tickers(exchange_name)
+
     async def get_top_gainers(self, exchange_name: str, limit: int = 10) -> List[Dict]:
         """Get top gainers from a specific exchange"""
         tickers = await self._fetch_exchange_tickers(exchange_name)

@@ -8,7 +8,7 @@ class BotKeyboards:
         """Keyboard for selecting exchange"""
         keyboard = [
             [
-                InlineKeyboardButton("🌐 All Exchanges", callback_data="exchange:all")
+                InlineKeyboardButton("🌐 All exchanges", callback_data="exchange:all")
             ],
             [
                 InlineKeyboardButton("🟡 Binance", callback_data="exchange:binance"),
@@ -39,10 +39,10 @@ class BotKeyboards:
     @staticmethod
     def back_to_menu(mode: str = "gainers"):
         """Keyboard with back to menu button"""
-        label = "🔄 View Losers Again" if mode == "losers" else "🔄 View Gainers Again"
+        label = "🔄 Losers again" if mode == "losers" else "🔄 Gainers again"
         keyboard = [
             [
-                InlineKeyboardButton("🔙 Back to Menu", callback_data="menu:main"),
+                InlineKeyboardButton("🏠 Main menu", callback_data="menu:main"),
             ],
             [
                 InlineKeyboardButton(label, callback_data=f"menu:{mode}"),
@@ -53,24 +53,21 @@ class BotKeyboards:
     @staticmethod
     def alerts_toggle(enabled: bool):
         """Keyboard for toggling alerts"""
-        status = "🔔 ON" if enabled else "🔕 OFF"
-        action = "disable" if enabled else "enable"
+        if enabled:
+            toggle = InlineKeyboardButton("🔕 Turn alerts off", callback_data="alerts:disable")
+        else:
+            toggle = InlineKeyboardButton("🔔 Turn alerts on", callback_data="alerts:enable")
         
         keyboard = [
+            [toggle],
             [
-                InlineKeyboardButton(
-                    f"Alerts: {status} - Click to {action.upper()}", 
-                    callback_data=f"alerts:{action}"
-                )
+                InlineKeyboardButton("🎚️ Alert types", callback_data="menu:alert_types"),
             ],
             [
-                InlineKeyboardButton("🎚️ Alert Types", callback_data="menu:alert_types"),
+                InlineKeyboardButton("🏦 Exchanges", callback_data="menu:filter_exchanges"),
             ],
             [
-                InlineKeyboardButton("🛠️ Filter Exchanges", callback_data="menu:filter_exchanges"),
-            ],
-            [
-                InlineKeyboardButton("🔙 Back to Menu", callback_data="menu:main"),
+                InlineKeyboardButton("🏠 Main menu", callback_data="menu:main"),
             ],
         ]
         return InlineKeyboardMarkup(keyboard)
@@ -121,7 +118,7 @@ class BotKeyboards:
                 ),
             ],
             [
-                InlineKeyboardButton("🔙 Back to Alerts", callback_data="menu:alerts"),
+                InlineKeyboardButton("✅ Done", callback_data="menu:alerts"),
             ],
         ]
         return InlineKeyboardMarkup(keyboard)
@@ -147,7 +144,7 @@ class BotKeyboards:
                 InlineKeyboardButton(get_text("Gate.io", "gateio"), callback_data="toggle_exch:gateio"),
             ],
             [
-                InlineKeyboardButton("🔙 Done / Back", callback_data="menu:alerts"),
+                InlineKeyboardButton("✅ Done", callback_data="menu:alerts"),
             ],
         ]
         return InlineKeyboardMarkup(keyboard)
@@ -157,11 +154,11 @@ class BotKeyboards:
         """Main menu keyboard"""
         keyboard = [
             [
-                InlineKeyboardButton("📈 Top Gainers", callback_data="menu:gainers"),
-                InlineKeyboardButton("📉 Top Losers", callback_data="menu:losers"),
+                InlineKeyboardButton("📈 Top gainers", callback_data="menu:gainers"),
+                InlineKeyboardButton("📉 Top losers", callback_data="menu:losers"),
             ],
             [
-                InlineKeyboardButton("📋 Watchlist", callback_data="menu:watchlist"),
+                InlineKeyboardButton("⭐ Watchlist", callback_data="menu:watchlist"),
                 InlineKeyboardButton("🔔 Alerts", callback_data="menu:alerts"),
             ],
             [
@@ -175,11 +172,11 @@ class BotKeyboards:
         """Watchlist action keyboard"""
         keyboard = [
             [
-                InlineKeyboardButton("➕ Add Coin", callback_data="watchlist:add_prompt"),
-                InlineKeyboardButton("🗑️ Clear All", callback_data="watchlist:clear"),
+                InlineKeyboardButton("➕ Add coin", callback_data="watchlist:add_prompt"),
+                InlineKeyboardButton("🗑️ Clear all", callback_data="watchlist:clear"),
             ],
             [
-                InlineKeyboardButton("🔙 Back to Menu", callback_data="menu:main"),
+                InlineKeyboardButton("🏠 Main menu", callback_data="menu:main"),
             ],
         ]
         return InlineKeyboardMarkup(keyboard)

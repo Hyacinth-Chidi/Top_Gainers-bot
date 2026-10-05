@@ -6,6 +6,7 @@ from telegram import Bot
 from dex.solana import SolanaClient, TokenActivity, WalletTrade
 from database.client import DatabaseClient
 from bot.utils import escape_md, format_price
+from bot.messages import DISCLAIMER
 from config import config
 from .broadcaster import AlertBroadcaster
 
@@ -107,30 +108,24 @@ class DexTracker:
     async def _send_big_buy_alert(self, trade: WalletTrade, activity: TokenActivity):
         """Send alert for a big buy with wallet address"""
         if trade.amount_usd >= self.WHALE_BUY_USD:
-            emoji = "🐋"
-            title = "WHALE BUY DETECTED"
+            emoji, kind = "🐋", "Whale buy"
         else:
-            emoji = "💰"
-            title = "BIG BUY DETECTED"
+            emoji, kind = "💰", "Big buy"
 
         wallet_short = self.solana.format_wallet(trade.wallet)
         wallet_link = self.solana.get_solscan_link(trade.wallet)
         tx_link = self.solana.get_tx_link(trade.tx_hash)
 
+        # Token and amount first: that's what shows in the notification
         message = (
-            f"{emoji} *{title}* {emoji}\n\n"
-            f"🪙 *Token:* {escape_md(trade.token_symbol)}\n"
-            f"💵 *Amount:* ${trade.amount_usd:,.2f}\n"
-            f"📊 *Tokens:* {trade.amount_tokens:,.2f}\n"
-            f"💲 *Price:* {format_price(trade.price)}\n\n"
-            f"👛 *Wallet:* [{wallet_short}]({wallet_link})\n"
-            f"🔗 *TX:* [View on Solscan]({tx_link})\n\n"
-            f"📈 *Token Stats:*\n"
-            f"   • Buyers: {activity.unique_buyers}\n"
-            f"   • Sellers: {activity.unique_sellers}\n"
-            f"   • Buy Vol: ${activity.total_buy_volume:,.0f}\n"
-            f"   • Sell Vol: ${activity.total_sell_volume:,.0f}\n\n"
-            f"🔗 _Solana DEX_ • `{activity.token_address}`"
+            f"{emoji} {escape_md(trade.token_symbol)}: ${trade.amount_usd:,.0f} buy\n"
+            f"_{kind} on Solana DEX_\n\n"
+            f"💰 {format_price(trade.price)}  ·  {trade.amount_tokens:,.0f} tokens\n"
+            f"👛 Wallet: [{wallet_short}]({wallet_link})  ·  [Transaction]({tx_link})\n\n"
+            f"📊 Recent trades: {activity.unique_buyers} buyers vs {activity.unique_sellers} sellers\n"
+            f"Buy vol ${activity.total_buy_volume:,.0f}  ·  Sell vol ${activity.total_sell_volume:,.0f}\n\n"
+            f"Contract: `{activity.token_address}`\n\n"
+            f"{DISCLAIMER}"
         )
 
         await self.broadcaster.broadcast(message, "dex_alerts")
@@ -138,21 +133,20 @@ class DexTracker:
     async def _send_activity_alert(self, activity: TokenActivity):
         """Send alert for unusual buying activity (many buyers)"""
         message = (
-            f"🔥 *HIGH DEMAND DETECTED* 🔥\n\n"
-            f"🪙 *Token:* {escape_md(activity.token_symbol)}\n"
-            f"👥 *Buyers:* {activity.unique_buyers} (vs {activity.unique_sellers} sellers)\n"
-            f"💵 *Buy Volume:* ${activity.total_buy_volume:,.0f}\n"
-            f"📉 *Sell Volume:* ${activity.total_sell_volume:,.0f}\n"
+            f"🔥 {escape_md(activity.token_symbol)}: {activity.unique_buyers} buyers vs "
+            f"{activity.unique_sellers} sellers\n"
+            f"_Buying surge on Solana DEX_\n\n"
+            f"Buy vol ${activity.total_buy_volume:,.0f}  ·  Sell vol ${activity.total_sell_volume:,.0f}\n"
         )
 
         if activity.top_buyers:
-            message += "\n📊 *Top Buyers:*\n"
+            message += "\n*Top buyers*\n"
             for i, buyer in enumerate(activity.top_buyers[:5], 1):
                 wallet_short = self.solana.format_wallet(buyer["wallet"])
                 net_vol = buyer.get("net_volume", 0) or 0
-                message += f"   {i}. {wallet_short}: ${net_vol:,.0f}\n"
+                message += f"{i}. {wallet_short}: ${net_vol:,.0f}\n"
 
-        message += f"\n🔗 _Solana DEX_ • `{activity.token_address}`"
+        message += f"\nContract: `{activity.token_address}`\n\n{DISCLAIMER}"
 
         await self.broadcaster.broadcast(message, "dex_alerts")
 

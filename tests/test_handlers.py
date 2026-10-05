@@ -58,7 +58,7 @@ def test_count_selection_answers_once_and_shows_results():
     query = press(handlers, "count:5")
     assert query.answers == 1
     text, kwargs = query.edits[-1]
-    assert "Top 5 Losers - BINANCE" in text
+    assert "Top 5 Losers* · Binance" in text
     # "View again" button follows the current mode
     button = kwargs["reply_markup"].inline_keyboard[1][0]
     assert button.callback_data == "menu:losers"
