@@ -14,7 +14,7 @@ def make_tracker(users=None):
     db = FakeDB(users=users or [user(1)])
     bot = FakeBot()
     tracker = SpikeTracker(FakeExchangeClient(), bot, db)
-    tracker.broadcaster.SEND_DELAY = 0
+    tracker.broadcaster.BATCH_INTERVAL = 0
     asyncio.run(tracker.broadcaster.refresh())
     return tracker, bot, db
 
@@ -90,3 +90,57 @@ def test_cleanup_drops_momentum_for_inactive_coins():
     tracker.cleanup_old_history()
     assert tracker.price_history == {}
     assert tracker.momentum_history == {}
+
+
+def _coin(price, change_24h=10.0):
+    return {"symbol": "XUSDT", "exchange": "binance", "price": price,
+            "change_24h": change_24h, "volume_24h": 1_000_000, "url": ""}
+
+
+def _seed_price(tracker, price, minutes_ago=6):
+    tracker.price_history["XUSDT:binance"] = [
+        (price, datetime.utcnow() - timedelta(minutes=minutes_ago))
+    ]
+
+
+def test_pump_is_not_blocked_by_earlier_daily_alert():
+    tracker, _, db = make_tracker()
+    # Coin is a daily gainer -> daily alert goes out
+    asyncio.run(tracker._process_coin(_coin(1.00, change_24h=40.0)))
+    # Minutes later it rips +8% in 5m -> the pump alert must still go out
+    _seed_price(tracker, 1.00)
+    asyncio.run(tracker._process_coin(_coin(1.08, change_24h=48.0)))
+    assert [a[2] for a in db.saved_alerts] == ["daily_spikes", "confirmed_pumps"]
+
+
+def test_dump_right_after_pump_is_sent():
+    tracker, _, db = make_tracker()
+    _seed_price(tracker, 1.00)
+    asyncio.run(tracker._process_coin(_coin(1.10)))
+    _seed_price(tracker, 1.10)
+    asyncio.run(tracker._process_coin(_coin(1.00)))
+    assert [a[2] for a in db.saved_alerts] == ["confirmed_pumps", "dumps"]
+
+
+def test_pump_realerts_when_it_keeps_running():
+    tracker, _, db = make_tracker()
+    _seed_price(tracker, 1.00)
+    asyncio.run(tracker._process_coin(_coin(1.06)))
+    # Still pumping but not much further than the last alert -> no repeat
+    _seed_price(tracker, 1.03)
+    asyncio.run(tracker._process_coin(_coin(1.09)))
+    assert len(db.saved_alerts) == 1
+    # +5% beyond the last alerted price -> alert again despite the cooldown
+    _seed_price(tracker, 1.05)
+    asyncio.run(tracker._process_coin(_coin(1.12)))
+    assert [a[2] for a in db.saved_alerts] == ["confirmed_pumps", "confirmed_pumps"]
+
+
+def test_daily_alert_held_back_after_recent_pump():
+    tracker, _, db = make_tracker()
+    _seed_price(tracker, 1.00)
+    asyncio.run(tracker._process_coin(_coin(1.40, change_24h=40.0)))
+    # Next scan: no 5m move any more, but daily band still hit -> skipped
+    _seed_price(tracker, 1.40)
+    asyncio.run(tracker._process_coin(_coin(1.40, change_24h=40.0)))
+    assert [a[2] for a in db.saved_alerts] == ["confirmed_pumps"]

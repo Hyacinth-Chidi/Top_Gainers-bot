@@ -15,7 +15,10 @@ class AlertBroadcaster:
     every alert.
     """
 
-    SEND_DELAY = 0.05  # Stay well below Telegram's ~30 msg/s global limit
+    # Telegram allows ~30 messages/second overall. Send in parallel batches
+    # of this size, at most one batch per second, so alerts reach everyone fast.
+    BATCH_SIZE = 25
+    BATCH_INTERVAL = 1.0
     WATCHLIST_PREFIX = "⭐ *On your watchlist*\n\n"
 
     def __init__(self, bot: Bot, db: DatabaseClient):
@@ -48,9 +51,9 @@ class AlertBroadcaster:
         as a watchlist hit, even if they filtered out that exchange.
         """
         watchers = self._watchers.get(normalize_symbol(symbol), set()) if symbol else set()
-        blocked: Set[int] = set()
-        sent = 0
 
+        # Work out who gets the alert (watchlist users first - it's their coin)
+        recipients = []
         for user in self._users:
             user_id = user.get('id')
             if user_id is None or user_id in self._banned:
@@ -67,14 +70,33 @@ class AlertBroadcaster:
                 if allowed is not None and exchange.lower() not in [e.lower() for e in allowed]:
                     continue
 
-            text = self.WATCHLIST_PREFIX + message if is_watcher else message
-            result = await safe_send(self.bot, user_id, text)
-            if result == SendResult.OK:
-                sent += 1
-            elif result == SendResult.BLOCKED:
-                blocked.add(user_id)
+            recipients.append((not is_watcher, user_id))
+        recipients.sort(key=lambda r: r[0])
 
-            await asyncio.sleep(self.SEND_DELAY)
+        blocked: Set[int] = set()
+        sent = 0
+        loop = asyncio.get_running_loop()
+
+        for i in range(0, len(recipients), self.BATCH_SIZE):
+            batch = recipients[i:i + self.BATCH_SIZE]
+            started = loop.time()
+
+            results = await asyncio.gather(*(
+                safe_send(self.bot, user_id,
+                          message if not_watcher else self.WATCHLIST_PREFIX + message)
+                for not_watcher, user_id in batch
+            ))
+            for (_, user_id), result in zip(batch, results):
+                if result == SendResult.OK:
+                    sent += 1
+                elif result == SendResult.BLOCKED:
+                    blocked.add(user_id)
+
+            # Pace batches to stay under Telegram's rate limit
+            if i + self.BATCH_SIZE < len(recipients):
+                elapsed = loop.time() - started
+                if elapsed < self.BATCH_INTERVAL:
+                    await asyncio.sleep(self.BATCH_INTERVAL - elapsed)
 
         # Stop alerting users who blocked the bot or deleted their chat
         if blocked:

@@ -43,9 +43,16 @@ class SpikeTracker:
         "daily_dumps": timedelta(hours=12),
     }
     EARLY_PUMP_COOLDOWN = timedelta(minutes=30)
-    # Minimum gap between any two alerts for the same coin, so a pump alert
-    # isn't immediately followed by a daily-gainer alert for the same move
-    MIN_GAP_BETWEEN_ALERTS = timedelta(minutes=30)
+
+    # Fast alerts (5-minute pumps/dumps) are time-critical: they are never
+    # held back by other alerts for the coin, and they repeat within their
+    # cooldown if the move keeps going this much further (in %)
+    FAST_ALERT_TYPES = ("confirmed_pumps", "dumps")
+    ESCALATION_THRESHOLD = 5.0
+
+    # Daily alerts are informational: skip one if the coin was alerted for
+    # any reason recently, so it doesn't repeat news the user already got
+    DAILY_ALERT_GAP = timedelta(minutes=30)
 
     def __init__(self, exchange_client: ExchangeClient, bot: Bot, db: DatabaseClient):
         self.exchange_client = exchange_client
@@ -69,6 +76,9 @@ class SpikeTracker:
 
         # Last alert time per (coin, alert type)
         self.alerted_spikes: Dict[Tuple[str, str], datetime] = {}
+
+        # Price at the last alert per (coin, alert type), to detect escalation
+        self.alert_prices: Dict[Tuple[str, str], float] = {}
 
         # Last alert time per coin, any type
         self.last_alert_for_coin: Dict[str, datetime] = {}
@@ -169,7 +179,7 @@ class SpikeTracker:
 
         # ===== THRESHOLD ALERTS =====
         alert_type = self._classify_move(volatility_change, change_24h)
-        if alert_type and await self._should_alert(cache_key, symbol, exchange, alert_type, now):
+        if alert_type and await self._should_alert(cache_key, symbol, exchange, alert_type, price, now):
             if alert_type == "confirmed_pumps":
                 message = self.messages.format_pump_alert(
                     symbol, exchange, price, volatility_change, volume, coin.get('url', '')
@@ -194,6 +204,7 @@ class SpikeTracker:
             await self.broadcaster.broadcast(message, alert_type, exchange=exchange, symbol=symbol)
 
             self.alerted_spikes[(cache_key, alert_type)] = now
+            self.alert_prices[(cache_key, alert_type)] = price
             self.last_alert_for_coin[cache_key] = now
             change = volatility_change if alert_type in ("confirmed_pumps", "dumps") else change_24h
             await self.db.save_alert(symbol, exchange, change, alert_type=alert_type)
@@ -353,26 +364,43 @@ class SpikeTracker:
         return last_alert is None or now - last_alert >= self.EARLY_PUMP_COOLDOWN
 
     async def _should_alert(self, cache_key: str, symbol: str, exchange: str,
-                            alert_type: str, now: datetime) -> bool:
+                            alert_type: str, price: float, now: datetime) -> bool:
         """Determine if we should send an alert of this type for this coin"""
-        last_any = self.last_alert_for_coin.get(cache_key)
-        if last_any and now - last_any < self.MIN_GAP_BETWEEN_ALERTS:
-            return False
+        key = (cache_key, alert_type)
+
+        if alert_type not in self.FAST_ALERT_TYPES:
+            last_any = self.last_alert_for_coin.get(cache_key)
+            if last_any and now - last_any < self.DAILY_ALERT_GAP:
+                return False
 
         cooldown = self.ALERT_COOLDOWNS[alert_type]
-        last = self.alerted_spikes.get((cache_key, alert_type))
+        last = self.alerted_spikes.get(key)
         if last and now - last < cooldown:
-            return False
+            # Within cooldown, only a move that keeps going is worth another alert
+            return self._has_escalated(key, alert_type, price)
 
         # Database check covers alerts sent before a restart
-        if await self.db.has_recent_alert(
+        if not last and await self.db.has_recent_alert(
             symbol, exchange, hours=cooldown.total_seconds() / 3600, alert_type=alert_type
         ):
             # Remember it so we don't query again every cycle
-            self.alerted_spikes[(cache_key, alert_type)] = now
+            self.alerted_spikes[key] = now
+            self.alert_prices[key] = price
             return False
 
         return True
+
+    def _has_escalated(self, key: Tuple[str, str], alert_type: str, price: float) -> bool:
+        """Has a fast move kept going well past the price of its last alert?"""
+        if alert_type not in self.FAST_ALERT_TYPES:
+            return False
+        last_price = self.alert_prices.get(key)
+        if not last_price or last_price <= 0:
+            return False
+        move = ((price - last_price) / last_price) * 100
+        if alert_type == "confirmed_pumps":
+            return move >= self.ESCALATION_THRESHOLD
+        return move <= -self.ESCALATION_THRESHOLD
 
     def cleanup_old_history(self):
         """Drop history and cooldown entries that can no longer matter"""
@@ -399,8 +427,11 @@ class SpikeTracker:
             k: v for k, v in self.alerted_spikes.items()
             if now - v < self.ALERT_COOLDOWNS[k[1]]
         }
+        self.alert_prices = {
+            k: v for k, v in self.alert_prices.items() if k in self.alerted_spikes
+        }
 
-        gap_cutoff = now - self.MIN_GAP_BETWEEN_ALERTS
+        gap_cutoff = now - self.DAILY_ALERT_GAP
         self.last_alert_for_coin = {
             k: v for k, v in self.last_alert_for_coin.items() if v > gap_cutoff
         }

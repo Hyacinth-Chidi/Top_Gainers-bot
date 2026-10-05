@@ -13,7 +13,7 @@ def make(users, **kwargs):
     bot = FakeBot(kwargs.pop("fail_for", None))
     db = FakeDB(users=users, **kwargs)
     b = AlertBroadcaster(bot, db)
-    b.SEND_DELAY = 0
+    b.BATCH_INTERVAL = 0
     run(b.refresh())
     return b, bot, db
 
@@ -57,3 +57,29 @@ def test_blocked_users_get_alerts_disabled():
     # Not retried on the next alert
     run(b.broadcast("msg", "dumps", exchange="binance"))
     assert recipients(bot) == [1, 1]
+
+
+def test_watchers_are_sent_first():
+    b, bot, _ = make([user(1), user(2), user(3)], watchlists={"BTCUSDT": {3}})
+    run(b.broadcast("msg", "dumps", exchange="binance", symbol="BTCUSDT"))
+    assert recipients(bot)[0] == 3
+
+
+def test_sends_in_parallel_batches():
+    class SlowBot(FakeBot):
+        async def send_message(self, chat_id, text, **kwargs):
+            await asyncio.sleep(0.2)
+            await super().send_message(chat_id, text, **kwargs)
+
+    db = FakeDB(users=[user(i) for i in range(50)])
+    b = AlertBroadcaster(SlowBot(), db)
+    b.BATCH_INTERVAL = 0
+    run(b.refresh())
+
+    import time
+    start = time.monotonic()
+    sent = run(b.broadcast("msg", "dumps", exchange="binance"))
+    elapsed = time.monotonic() - start
+    assert sent == 50
+    # Sequential sending would take 50 * 0.2s = 10s; two batches take ~0.4s
+    assert elapsed < 2
