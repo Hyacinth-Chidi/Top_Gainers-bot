@@ -43,16 +43,36 @@ class BotHandlers:
         if await self._is_blocked(update):
             return
         user = update.effective_user
+        returning = await self.db.get_user(user.id) is not None
+        await self._register(user)
 
-        # Create or update user in database
+        await update.message.reply_text(
+            self.messages.welcome(user.first_name, returning=returning),
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=self.keyboards.main_menu()
+        )
+
+    async def _register(self, user):
+        """Create or update the user so every command works without /start"""
         await self.db.create_or_update_user(
             user_id=user.id,
             username=user.username,
             first_name=user.first_name
         )
 
+    async def _get_or_create_user(self, tg_user) -> dict:
+        user = await self.db.get_user(tg_user.id)
+        if not user:
+            await self._register(tg_user)
+            user = await self.db.get_user(tg_user.id) or {}
+        return user
+
+    async def unknown_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Friendly reply to text or commands the bot doesn't understand"""
+        if not update.message or await self._is_blocked(update):
+            return
         await update.message.reply_text(
-            self.messages.WELCOME,
+            self.messages.UNKNOWN,
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=self.keyboards.main_menu()
         )
@@ -86,12 +106,7 @@ class BotHandlers:
         """Handle /alerts command"""
         if await self._is_blocked(update):
             return
-        user = await self.db.get_user(update.effective_user.id)
-
-        if not user:
-            await update.message.reply_text("⚠️ Please use /start first!")
-            return
-
+        user = await self._get_or_create_user(update.effective_user)
         alerts_enabled = user.get('alerts_enabled', False)
         await update.message.reply_text(
             self.messages.alert_status(alerts_enabled),
@@ -125,7 +140,7 @@ class BotHandlers:
             verb = "add" if action == "add" else "remove"
             if len(args) < 2:
                 await update.message.reply_text(
-                    f"⚠️ Please specify a symbol.\n\nExample: `/watchlist {verb} BTCUSDT`",
+                    f"Which coin? For example: `/watchlist {verb} BTC`",
                     parse_mode=ParseMode.MARKDOWN
                 )
                 return
@@ -133,7 +148,7 @@ class BotHandlers:
             raw = args[1].upper().replace("/", "").replace("-", "").replace("_", "")
             if not _SYMBOL_RE.match(raw):
                 await update.message.reply_text(
-                    "⚠️ That doesn't look like a valid symbol. Use letters and numbers only, e.g. `BTC` or `BTCUSDT`.",
+                    "🤔 That doesn't look like a coin symbol. Try something like `BTC` or `BTCUSDT`.",
                     parse_mode=ParseMode.MARKDOWN
                 )
                 return
@@ -141,23 +156,23 @@ class BotHandlers:
 
             if verb == "add":
                 if await self.db.add_to_watchlist(user_id, symbol):
-                    text = (f"✅ `{symbol}` added to your watchlist!\n\n"
-                            "Alerts for this coin will be flagged ⭐ and reach you from every exchange.")
+                    user = await self._get_or_create_user(update.effective_user)
+                    text = self.messages.watchlist_added(symbol, user.get('alerts_enabled', False))
                 else:
-                    text = f"ℹ️ `{symbol}` is already in your watchlist."
+                    text = f"ℹ️ `{symbol}` is already on your watchlist."
             else:
                 if await self.db.remove_from_watchlist(user_id, symbol):
                     text = f"🗑️ `{symbol}` removed from your watchlist."
                 else:
-                    text = f"ℹ️ `{symbol}` was not in your watchlist."
+                    text = f"ℹ️ `{symbol}` wasn't on your watchlist."
             await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
         elif action == "clear":
             count = await self.db.clear_watchlist(user_id)
             if count > 0:
-                text = f"🗑️ Cleared *{count}* symbols from your watchlist."
+                text = f"🗑️ Removed *{count}* coin{'s' if count != 1 else ''} from your watchlist."
             else:
-                text = "ℹ️ Your watchlist was already empty."
+                text = "ℹ️ Your watchlist is already empty."
             await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
         else:
@@ -178,7 +193,7 @@ class BotHandlers:
         user_id = update.effective_user.id
 
         if await self._is_blocked(update):
-            await query.answer("⛔ You don't have access to this bot.", show_alert=True)
+            await query.answer("⛔ Your access to this bot has been restricted.", show_alert=True)
             return
 
         routes = {
@@ -296,7 +311,7 @@ class BotHandlers:
 
         if action == "main":
             await reply(
-                "🏠 *Main Menu*\n\nWhat would you like to do?",
+                "🏠 *Main menu*\n\nWhat would you like to check?",
                 parse_mode=ParseMode.MARKDOWN,
                 reply_markup=self.keyboards.main_menu()
             )
@@ -308,10 +323,7 @@ class BotHandlers:
                 reply_markup=self.keyboards.exchange_selection()
             )
         elif action == "alerts":
-            user = await self.db.get_user(user_id)
-            if not user:
-                await reply("⚠️ Please use /start first!")
-                return
+            user = await self._get_or_create_user(query.from_user)
             alerts_enabled = user.get('alerts_enabled', False)
             await reply(
                 self.messages.alert_status(alerts_enabled),
@@ -324,7 +336,7 @@ class BotHandlers:
             current_exchanges = set(prefs.get('alert_exchanges', ALL_EXCHANGES))
 
             await reply(
-                "🛠️ *Filter Exchanges*\n\nSelect which exchanges you want to receive alerts from:",
+                self.messages.FILTER_EXCHANGES_PROMPT,
                 parse_mode=ParseMode.MARKDOWN,
                 reply_markup=self.keyboards.alerts_exchange_selection(current_exchanges)
             )
@@ -354,20 +366,17 @@ class BotHandlers:
         if action == "add_prompt":
             await query.answer()
             await query.message.reply_text(
-                "➕ *Add to Watchlist*\n\n"
-                "Send the symbol you want to add:\n\n"
-                "Example: `/watchlist add BTCUSDT`\n"
-                "Or just: `/watchlist add BTC`",
+                self.messages.WATCHLIST_ADD_PROMPT,
                 parse_mode=ParseMode.MARKDOWN
             )
         elif action == "clear":
             count = await self.db.clear_watchlist(user_id)
             if count > 0:
                 await query.answer(f"Cleared {count} coins!")
-                text = f"🗑️ Cleared *{count}* symbols from your watchlist.\n\nYour watchlist is now empty."
+                text = f"🗑️ Removed *{count}* coin{'s' if count != 1 else ''} from your watchlist."
             else:
                 await query.answer("Watchlist already empty")
-                text = "ℹ️ Your watchlist was already empty."
+                text = "ℹ️ Your watchlist is already empty."
             await query.edit_message_text(
                 text,
                 parse_mode=ParseMode.MARKDOWN,

@@ -19,7 +19,8 @@ class AlertBroadcaster:
     # of this size, at most one batch per second, so alerts reach everyone fast.
     BATCH_SIZE = 25
     BATCH_INTERVAL = 1.0
-    WATCHLIST_PREFIX = "⭐ *On your watchlist*\n\n"
+    # Star goes on the first line so it shows in the phone notification
+    WATCHLIST_PREFIX = "⭐ "
 
     def __init__(self, bot: Bot, db: DatabaseClient):
         self.bot = bot

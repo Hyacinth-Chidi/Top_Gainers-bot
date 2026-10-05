@@ -173,12 +173,14 @@ class SpikeTracker:
         if alert_type and await self._should_alert(cache_key, symbol, exchange, alert_type, price, now):
             if alert_type == "confirmed_pumps":
                 message = self.messages.format_pump_alert(
-                    symbol, exchange, price, volatility_change, volume, coin.get('url', '')
+                    symbol, exchange, price, volatility_change, volume, coin.get('url', ''),
+                    change_24h=change_24h
                 )
                 print(f"🚀 PUMP: {symbol} on {exchange} (+{volatility_change:.2f}% in 5m)")
             elif alert_type == "dumps":
                 message = self.messages.format_dump_alert(
-                    symbol, exchange, price, volatility_change, volume, coin.get('url', '')
+                    symbol, exchange, price, volatility_change, volume, coin.get('url', ''),
+                    change_24h=change_24h
                 )
                 print(f"💥 DUMP: {symbol} on {exchange} ({volatility_change:.2f}% in 5m)")
             elif alert_type == "daily_spikes":

@@ -1,5 +1,6 @@
 import asyncio
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram import BotCommand
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 from database.client import DatabaseClient
 
 from config import config
@@ -29,6 +30,8 @@ class TopGainersBot:
         # Connect to database
         await self.db.connect()
         
+        await self._set_bot_profile(application)
+        
         # Initialize spike tracker (CEX)
         self.spike_tracker = SpikeTracker(self.exchange_client, application.bot, self.db)
         
@@ -49,6 +52,30 @@ class TopGainersBot:
         print(f"📊 Monitoring {len(config.EXCHANGES)} CEX exchanges")
         print(f"⏱️  Check interval: {config.SPIKE_CHECK_INTERVAL}s")
         print(f"📈 Spike threshold: {config.MIN_SPIKE_THRESHOLD}%-{config.MAX_SPIKE_THRESHOLD}%")
+    
+    async def _set_bot_profile(self, application: Application) -> None:
+        """Command menu (the "/" button) and the text shown before /start"""
+        try:
+            await application.bot.set_my_commands([
+                BotCommand("start", "Open the main menu"),
+                BotCommand("gainers", "Today's top gainers"),
+                BotCommand("losers", "Today's top losers"),
+                BotCommand("alerts", "Turn alerts on or off"),
+                BotCommand("watchlist", "Your favourite coins"),
+                BotCommand("help", "How to use the bot"),
+            ])
+            await application.bot.set_my_short_description(
+                "Real-time pump & dump alerts and top gainers for crypto futures."
+            )
+            await application.bot.set_my_description(
+                "📈 Top gainers and losers on Binance, Bybit, MEXC, Bitget and Gate.io\n"
+                "🚀 Pump and dump alerts within a minute\n"
+                "⭐ A watchlist for your favourite coins\n\n"
+                "Tap Start to begin."
+            )
+        except Exception as e:
+            # Cosmetic only - never stop the bot over it
+            print(f"⚠️ Could not set bot commands/description: {e}")
     
     async def post_shutdown(self, application: Application) -> None:
         """Called before bot shutdown"""
@@ -120,6 +147,11 @@ class TopGainersBot:
         
         # Register callback query handler for buttons
         self.application.add_handler(CallbackQueryHandler(handlers.button_callback))
+        
+        # Anything else (plain text, unknown commands) gets a friendly pointer
+        self.application.add_handler(
+            MessageHandler(filters.TEXT & filters.ChatType.PRIVATE, handlers.unknown_message)
+        )
         
         # Log unexpected handler errors instead of failing silently
         self.application.add_error_handler(self.error_handler)
