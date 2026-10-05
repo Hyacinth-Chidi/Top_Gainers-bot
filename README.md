@@ -1,144 +1,150 @@
 # Top Gainers Telegram Bot
 
-A powerful Telegram bot that tracks top-performing futures/derivatives across major crypto exchanges and sends real-time spike alerts.
+A Telegram bot that tracks USDT perpetual futures across major crypto exchanges, shows the top gainers and losers on demand, and sends real-time pump and dump alerts. It can also watch Solana DEX trading for big buys.
 
 ## Features
 
-- 📊 **Top Gainers Tracking**: View top 5/10/20 gainers across Binance, Bybit, MEXC, Bitget, and Gate.io
-- 🚨 **Spike Alerts**: Real-time notifications for 30-70% sudden gains
-- 🎯 **Smart Filtering**: Filter by exchange or view all exchanges combined
-- 💾 **Persistent Storage**: User preferences saved with MongoDB
-- ⚡ **Real-time Monitoring**: Background task continuously monitors all exchanges
-- 📜 **Chat History**: Keeps all viewed gainers in chat history for easy reference
+- 📊 **Top Gainers & Losers**: Top 5/10/20 movers on Binance, Bybit, MEXC, Bitget and Gate.io, per exchange or all combined, with direct trading links
+- 🔮 **Early Pump Signals**: A 0–100 score built from trading volume, momentum, short-term price moves, the daily trend and order book buy pressure
+- 🚀 **Pump & 💥 Dump Alerts**: A coin moves ±5% within 5 minutes
+- 🔥 **Daily Gainers / 📉 Losers**: A coin is up or down 30–70% on the day (adjustable)
+- 🌐 **Solana DEX Alerts**: Big buys and whale buys with wallet links, plus demand spikes (optional, needs a Birdeye API key)
+- ⭐ **Watchlist**: Alerts for your coins are flagged and reach you from every exchange, before anyone else
+- 🎚️ **Per-user settings**: Turn each alert type on or off and choose which exchanges to hear from
+- 🛡️ **Admin tools**: Broadcast, statistics, ban and unban
+
+## How Alerts Work
+
+The bot scans every exchange every `SPIKE_CHECK_INTERVAL` seconds (60 by default) and keeps a short price history in memory.
+
+| Alert | Trigger | Repeats |
+|---|---|---|
+| 🔮 Early pump | Pump score ≥ 50 while the price is rising (≥ 70 = high confidence) | At most every 30 min per coin |
+| 🚀 Pump | +5% within 5 minutes | Every 1h per coin, or sooner if it climbs another 5% past the last alert |
+| 💥 Dump | −5% within 5 minutes | Every 1h per coin, or sooner if it falls another 5% past the last alert |
+| 🔥 Daily gainer | +30% to +70% over 24h | At most every 12h per coin |
+| 📉 Daily loser | −30% to −70% over 24h (off by default) | At most every 12h per coin |
+| 🌐 DEX big buy | Single Solana buy ≥ $5k (🐋 ≥ $25k) | Once per transaction |
+| 🌐 DEX demand | ≥ 10 buyers and twice as many buyers as sellers | At most every 2h per token |
+
+- **Pump and dump alerts are never held back** by other alerts for the same coin, because timing matters. A daily alert is skipped if the coin was alerted for any reason in the last 30 minutes.
+- **Order book "Sniper Mode"**: when a coin scores 20–49, the bot subscribes to its live order book (Binance and MEXC) so buy pressure counts toward the next score.
+- **Delivery**: alerts are sent in parallel batches of 25 per second, just under Telegram's limit. People who have the coin on their watchlist get it first.
+- **Alerts are off by default.** Users switch them on with `/alerts`. Users who block the bot have their alerts switched off automatically.
 
 ## Tech Stack
 
 - **Python 3.11+**
 - **python-telegram-bot 21.0** - Telegram Bot API
 - **CCXT 4.2.25** - Unified exchange API
+- **websockets 12** - Live order book streams
+- **httpx** - Birdeye (Solana DEX) API
 - **Motor 3.3.2** - Async MongoDB driver
-- **MongoDB** - NoSQL database
-- **asyncio** - Async operations
+- **MongoDB** - Users, settings, watchlists, alert history
 
 ## Project Structure
 
 ```
 top-gainers-bot/
 ├── bot/
-│   ├── __init__.py
-│   ├── handlers.py       # Command & callback handlers
-│   ├── keyboards.py      # Inline keyboards
-│   └── messages.py       # Message templates
+│   ├── handlers.py          # Command & button handlers
+│   ├── keyboards.py         # Inline keyboards
+│   ├── messages.py          # Message templates
+│   └── utils.py             # Markdown escaping, price formatting, safe sending
 ├── database/
-│   ├── __init__.py
-│   └── client.py         # MongoDB client wrapper
+│   └── client.py            # MongoDB client (users, prefs, watchlists, alert history)
+├── dex/
+│   └── solana.py            # Birdeye API client (Solana DEX trades & wallets)
 ├── exchanges/
-│   ├── __init__.py
-│   └── client.py         # Exchange API wrapper (CCXT)
+│   ├── client.py            # Exchange API wrapper (CCXT) with a short ticker cache
+│   └── websocket_client.py  # Order book streams ("Sniper Mode": Binance + MEXC)
 ├── monitoring/
-│   ├── __init__.py
-│   └── tracker.py        # Spike detection & alerts
-├── config.py             # Configuration management
-├── main.py               # Application entry point
-├── requirements.txt      # All dependencies
-├── .env.example          # Environment template
-├── .gitignore            # Git ignore rules
-└── README.md             # This file
+│   ├── broadcaster.py       # Delivers alerts (prefs, bans, watchlists, rate limits)
+│   ├── dex_tracker.py       # Solana big-buy / demand alerts
+│   └── tracker.py           # Pump, dump & early-signal detection
+├── tests/                   # Unit tests (pytest)
+├── config.py                # Configuration from environment variables
+├── main.py                  # Application entry point
+├── requirements.txt         # Dependencies
+├── .env.example             # Environment template
+└── IMPROVEMENTS.md          # Roadmap
 ```
 
-## Setup Instructions
+## Setup
 
 ### 1. Prerequisites
 
 - Python 3.11 or higher
-- MongoDB Atlas account (free tier M0 cluster)
-- Telegram Bot Token from [@BotFather](https://t.me/BotFather)
+- A MongoDB database (MongoDB Atlas free M0 cluster works)
+- A Telegram bot token from [@BotFather](https://t.me/BotFather)
+- Optional: a free [Birdeye](https://birdeye.so/) API key for Solana DEX alerts
 
-### 2. Clone & Install
+### 2. Install
 
 ```bash
-# Navigate to project
 cd top-gainers-bot
 
-# Create virtual environment
 python -m venv venv
-
-# Activate virtual environment
 # Windows:
 venv\Scripts\activate
 # macOS/Linux:
 source venv/bin/activate
 
-# Install dependencies
 pip install -r requirements.txt
 ```
 
-### 3. MongoDB Setup
+### 3. MongoDB Atlas
 
-#### Create MongoDB Atlas Database
+1. Create a free account at [MongoDB Atlas](https://www.mongodb.com/cloud/atlas) and an **M0 Free Cluster**
+2. Under "Security" → "Database Access", create a database user
+3. Under "Security" → "Network Access", add your server's IP (or 0.0.0.0/0 for testing)
+4. Click "Connect" and copy the connection string, filling in your username and password
 
-1. Go to [MongoDB Atlas](https://www.mongodb.com/cloud/atlas)
-2. Create a free account
-3. Create a new **M0 Free Cluster**
-4. Under "Security" → "Database Access" → Create database user with username & password
-5. Under "Security" → "Network Access" → Add your IP (or 0.0.0.0/0 for testing)
-6. Click "Connect" and copy the connection string
-7. Replace `<username>` and `<password>` with your credentials
-
-The connection string should look like:
 ```
 mongodb+srv://username:password@cluster0.xxxxx.mongodb.net/?retryWrites=true&w=majority
 ```
 
-**Important:** If your password contains special characters (like `@`, `#`, etc.), URL-encode them:
-- `@` → `%40`
-- `#` → `%23`
-- `:` → `%3A`
+If your password contains special characters, URL-encode them (`@` → `%40`, `#` → `%23`, `:` → `%3A`).
 
-### 4. Environment Configuration
+The bot creates its collections and indexes automatically on first start.
 
-Create `.env` file from template:
+### 4. Telegram Bot Token
+
+1. Message [@BotFather](https://t.me/BotFather) and send `/newbot`
+2. Follow the instructions and copy the token
+
+### 5. Configure
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env` with your values:
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | ✅ | | Token from @BotFather |
+| `MONGODB_URL` | ✅ | | MongoDB connection string |
+| `SPIKE_CHECK_INTERVAL` | | `60` | Seconds between market scans (lower = faster alerts, more API calls) |
+| `MIN_SPIKE_THRESHOLD` | | `30` | Daily gainer/loser band, lower bound (%) |
+| `MAX_SPIKE_THRESHOLD` | | `70` | Daily gainer/loser band, upper bound (%) |
+| `EXCHANGES` | | all five | Exchanges to scan for alerts, comma-separated |
+| `BYBIT_HOSTNAME` | | `bybit.com` | Bybit region: `bybit.com`, `bybit.us`, `bybit.eu` |
+| `ADMIN_USER_IDS` | | | Telegram user IDs with admin access, comma-separated |
+| `ALERT_HISTORY_DAYS` | | `7` | Days of alert history kept in MongoDB (minimum 1) |
+| `DEX_ENABLED` | | `true` | Solana DEX tracking (only runs when `BIRDEYE_API_KEY` is set) |
+| `BIRDEYE_API_KEY` | | | Birdeye API key for DEX alerts |
+| `DEX_BIG_BUY_USD` | | `5000` | Minimum buy size for a DEX "big buy" alert |
+| `DEX_WHALE_BUY_USD` | | `25000` | Minimum buy size for a 🐋 whale alert |
+| `ENVIRONMENT` | | `development` | `development` or `production` |
 
-```env
-# Telegram Bot Token
-TELEGRAM_BOT_TOKEN=your_bot_token_from_botfather
+To find your Telegram user ID for `ADMIN_USER_IDS`, message [@userinfobot](https://t.me/userinfobot).
 
-# MongoDB Connection String
-MONGODB_URL=mongodb+srv://username:password@cluster.mongodb.net/?retryWrites=true&w=majority
-
-# Monitoring Settings
-SPIKE_CHECK_INTERVAL=60          # Check every 60 seconds
-MIN_SPIKE_THRESHOLD=30           # Alert on gains 30%+
-MAX_SPIKE_THRESHOLD=70           # Alert on gains up to 70%
-
-# Exchanges to Monitor
-EXCHANGES=binance,bybit,mexc,bitget,gateio
-
-# Environment
-ENVIRONMENT=development          # or 'production'
-```
-
-### 5. Get Telegram Bot Token
-
-1. Open Telegram and message [@BotFather](https://t.me/BotFather)
-2. Send `/newbot`
-3. Follow the instructions to create your bot
-4. Copy the token and add it to `.env`
-
-### 6. Run the Bot
+### 6. Run
 
 ```bash
-# Make sure venv is activated
 python main.py
 ```
 
-You should see:
+You should see something like:
 ```
 ✓ Connected to BINANCE
 ✓ Connected to BYBIT
@@ -148,181 +154,119 @@ You should see:
 🚀 Starting Top Gainers Bot...
 ✓ Registered command handlers
 ✓ Connected to MongoDB
+🌐 DEX Tracking: DISABLED - set BIRDEYE_API_KEY to enable (free key at https://birdeye.so/)
 ✅ Bot is running!
-📊 Monitoring 5 exchanges
+📊 Monitoring 5 CEX exchanges
 ⏱️  Check interval: 60s
 📈 Spike threshold: 30.0%-70.0%
 🔍 Spike tracker started
 ```
 
+### 7. Tests
+
+The tests use fakes, so they need no Telegram, MongoDB or network access:
+
+```bash
+pip install pytest mongomock-motor
+python -m pytest
+```
+
 ## Usage
 
-### User Commands
+### Commands
 
-- `/start` - Initialize bot and see welcome message
-- `/gainers` - View top gainers (select exchange and count)
-- `/alerts` - Enable/disable spike alerts
-- `/help` - Show help information
+| Command | Description |
+|---|---|
+| `/start` | Register and open the main menu |
+| `/gainers` | Top gainers (pick an exchange, then 5/10/20) |
+| `/losers` | Top losers |
+| `/alerts` | Turn alerts on or off, choose alert types and exchanges |
+| `/watchlist` | Show your watchlist |
+| `/watchlist add BTC` | Add a coin (`BTC` and `BTCUSDT` both work) |
+| `/watchlist remove BTC` | Remove a coin |
+| `/watchlist clear` | Remove all coins |
+| `/help` | Help |
 
-### How It Works
+### Admin Commands
 
-#### 1. Manual Queries (Top Gainers)
-- User sends `/gainers`
-- Selects exchange (Binance, Bybit, MEXC, Bitget, Gate.io, or All)
-- Selects top count (5, 10, or 20)
-- Bot fetches and displays results
-- Results stay in chat history for reference
+Only users listed in `ADMIN_USER_IDS` can use these.
 
-#### 2. Automatic Alerts (Spike Detection)
-- Background task monitors all exchanges every 60 seconds
-- Detects sudden spikes between 30-70% gain
-- Sends notifications to users with alerts enabled
-- Prevents duplicate alerts within 1 hour
+| Command | Description |
+|---|---|
+| `/broadcast <message>` | Send an announcement to all users (multi-line text is kept) |
+| `/stats_admin` | Users, alerts, watchlists and monitored exchanges |
+| `/ban <user_id> [reason]` | Block a user from the bot and its alerts |
+| `/unban <user_id>` | Unblock a user |
 
-## MongoDB Schema
+## MongoDB Collections
 
-### Users Collection
-```javascript
-{
-  _id: ObjectId,
-  id: Number,           // Telegram user ID
-  username: String,
-  first_name: String,
-  alerts_enabled: Boolean,
-  created_at: Date,
-  last_active: Date
-}
-```
+| Collection | Contents | Growth |
+|---|---|---|
+| `users` | Telegram ID, name, `alerts_enabled`, timestamps | One per user |
+| `user_preferences` | `alert_exchanges`, `alert_types` (on/off per alert type) | One per user |
+| `watchlists` | `user_id`, `symbols` | One per user |
+| `banned_users` | `user_id`, `banned_by`, `reason`, `banned_at` | One per ban |
+| `alert_history` | `symbol`, `exchange`, `alert_type`, `percent_gain`, `alerted_at` | Deleted automatically after `ALERT_HISTORY_DAYS` |
+| `counters` | All-time number of alerts sent (for `/stats_admin`) | One document |
 
-### User Preferences Collection
-```javascript
-{
-  _id: ObjectId,
-  user_id: Number,
-  preferred_exchanges: [String],
-  default_top_count: Number,
-  min_alert_threshold: Number,
-  max_alert_threshold: Number
-}
-```
-
-### Alert History Collection
-```javascript
-{
-  _id: ObjectId,
-  symbol: String,
-  exchange: String,
-  percent_gain: Number,
-  alerted_at: Date
-}
-```
-
-### Price Snapshots Collection
-```javascript
-{
-  _id: ObjectId,
-  symbol: String,
-  exchange: String,
-  price: Number,
-  volume_24h: Number,
-  percent_change_24h: Number,
-  timestamp: Date
-}
-```
+Each alert is stored once, not once per user. Alert history is only needed so cooldowns survive a restart; Telegram's chat history can't be used for that because bots can't read the messages they've sent.
 
 ## Customization
 
-### Change Monitoring Interval
+### Faster Alerts
 
-Edit `.env`:
 ```env
-SPIKE_CHECK_INTERVAL=30  # Check every 30 seconds instead of 60
+SPIKE_CHECK_INTERVAL=30
 ```
 
-### Adjust Spike Thresholds
+Each scan downloads the full ticker list from every exchange in `EXCHANGES`, so halving the interval doubles the API calls.
 
-Edit `.env`:
-```env
-MIN_SPIKE_THRESHOLD=20   # Lower bound (20% minimum)
-MAX_SPIKE_THRESHOLD=100  # Upper bound (up to 100%)
-```
+### Alert Thresholds
+
+The daily band is set in `.env` (`MIN_SPIKE_THRESHOLD`, `MAX_SPIKE_THRESHOLD`). The 5-minute pump/dump threshold, pump score weights and cooldowns are constants at the top of `monitoring/tracker.py`.
 
 ### Add More Exchanges
 
-CCXT supports 100+ exchanges. To add more:
+CCXT supports 100+ exchanges:
 
 1. Check [CCXT Supported Exchanges](https://github.com/ccxt/ccxt#supported-cryptocurrency-exchange-markets)
-2. Add exchange to `exchanges/client.py` in `SUPPORTED_EXCHANGES` dict
-3. Update `.env` EXCHANGES list
-
-Example:
-```python
-# In exchanges/client.py
-SUPPORTED_EXCHANGES = {
-    'binance': ccxt.binance,
-    'bybit': ccxt.bybit,
-    'kucoin': ccxt.kucoin,  # Add new exchange
-    ...
-}
-```
+2. Add it to `SUPPORTED_EXCHANGES` and `EXCHANGE_CONFIGS` in `exchanges/client.py`, and a trading link in `_generate_trade_link`
+3. Add it to `EXCHANGES` in `.env`, and to the keyboards in `bot/keyboards.py` and `ALL_EXCHANGES` in `database/client.py`
 
 ## Deployment
 
-### Option 1: Railway
+The bot uses long polling, so it runs as a **background worker** (no web port needed). Run only one instance per bot token.
+
+### Railway
 
 ```bash
-# Install Railway CLI
 npm i -g @railway/cli
-
-# Login and deploy
 railway login
 railway init
 railway up
 ```
 
-### Option 2: Render
+Set the environment variables in the Railway dashboard.
 
-1. Connect GitHub repo to Render
-2. Set environment variables in Render dashboard
-3. Deploy as Background Worker
-4. Set start command: `python main.py`
+### Render
 
-### Option 3: Heroku
+1. Connect the GitHub repo and create a **Background Worker**
+2. Build command: `pip install -r requirements.txt`
+3. Start command: `python main.py`
+4. Set the environment variables in the dashboard
 
-```bash
-# Install Heroku CLI
-# Login and deploy
-heroku login
-heroku create your-bot-name
-git push heroku main
-```
-
-### Option 4: VPS (DigitalOcean, AWS, etc.)
+### VPS (DigitalOcean, AWS, etc.)
 
 ```bash
-# SSH into your VPS
-ssh user@your_vps_ip
-
-# Clone repo
 git clone <your_repo_url>
 cd top-gainers-bot
-
-# Create and activate venv
 python3 -m venv venv
 source venv/bin/activate
-
-# Install dependencies
 pip install -r requirements.txt
-
-# Create .env file
-nano .env
-# Paste your environment variables
-
-# Run with systemd (for persistent execution)
-sudo nano /etc/systemd/system/topgainers.service
+cp .env.example .env && nano .env
 ```
 
-Add this to the service file:
+Create `/etc/systemd/system/topgainers.service`:
 ```ini
 [Unit]
 Description=Top Gainers Bot
@@ -332,7 +276,7 @@ After=network.target
 Type=simple
 User=your_user
 WorkingDirectory=/path/to/top-gainers-bot
-ExecStart=/path/to/venv/bin/python main.py
+ExecStart=/path/to/top-gainers-bot/venv/bin/python main.py
 Restart=on-failure
 RestartSec=10
 
@@ -343,225 +287,48 @@ WantedBy=multi-user.target
 Then:
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable topgainers
-sudo systemctl start topgainers
+sudo systemctl enable --now topgainers
+journalctl -u topgainers -f   # follow the logs
 ```
 
 ## Troubleshooting
 
 ### Bot Not Responding
-
-- Check `TELEGRAM_BOT_TOKEN` is correct in `.env`
-- Ensure bot is running: `python main.py`
-- Check logs for error messages
-- Verify bot is active in Telegram (@BotFather → /mybots)
+- Check `TELEGRAM_BOT_TOKEN` in `.env`
+- Make sure only one copy of the bot is running (two instances with one token conflict)
+- Check the logs for `⚠️ Error handling update`
 
 ### MongoDB Connection Failed
+- Check `MONGODB_URL`, and URL-encode special characters in the password
+- Make sure the Atlas cluster is running and your server's IP is allowed under Network Access
+- Test the connection: `mongosh "<connection_string>"`
 
-- Verify `MONGODB_URL` in `.env` is correct
-- Check MongoDB Atlas cluster is running (green status)
-- Verify IP whitelist includes your computer's IP
-- Test connection: `mongosh <connection_string>`
-- Check username/password are URL-encoded if they contain special characters
+### No Alerts
+- Alerts are off by default: enable them with `/alerts`
+- Check "🎚️ Alert Types" and "🛠️ Filter Exchanges" in `/alerts`
+- Pump and dump alerts need 5 minutes of price history, so none fire in the first 5 minutes after a start
+- Check the logs for `✓ Connected to ...` and `Error fetching from ...`
 
-### No Spike Alerts
-
-- Verify `SPIKE_CHECK_INTERVAL` is set and > 0
-- Check exchange connections in logs (should show ✓ for all)
-- Ensure users have alerts enabled (use `/alerts` command)
-- Monitor logs for "Spike tracker started"
+### No DEX Alerts
+- Set `BIRDEYE_API_KEY`; without it the DEX tracker doesn't start
+- Make sure "🌐 DEX Alerts" is on under `/alerts` → "Alert Types"
 
 ### Exchange API Errors
+- Some exchanges block certain regions (Bybit: try `BYBIT_HOSTNAME`; Binance blocks some cloud regions)
+- Check the exchange's status page
+- Temporarily remove the failing exchange from `EXCHANGES`
 
-- CCXT has rate limits - bot implements retries
-- Check if exchange is down: visit exchange status page
-- Verify internet connection
-- Try reducing number of exchanges temporarily
+## Roadmap
 
-### High Memory Usage
-
-- Reduce `SPIKE_CHECK_INTERVAL` slightly
-- Limit number of exchanges monitored
-- Check for memory leaks in logs
+See [IMPROVEMENTS.md](IMPROVEMENTS.md).
 
 ## Contributing
 
-Feel free to submit issues and enhancement requests!
+Issues and enhancement requests are welcome.
 
 ## License
 
 MIT License
-
-## Support
-
-Questions? Issues? 
-- Open a GitHub issue
-- Contact [@your_telegram_username]
-
----
-
-**Happy Trading! 🚀📈**
-EXCHANGES=binance,bybit,mexc,bitget
-```
-
-### 5. Get Telegram Bot Token
-
-1. Open Telegram and message [@BotFather](https://t.me/BotFather)
-2. Send `/newbot`
-3. Follow instructions to create bot
-4. Copy token and add to `.env`
-
-### 6. Run the Bot
-
-```bash
-python main.py
-```
-
-You should see:
-```
-🚀 Starting Top Gainers Bot...
-✓ Connected to database
-✓ Connected to BINANCE
-✓ Connected to BYBIT
-✓ Connected to MEXC
-✓ Connected to BITGET
-✓ Registered command handlers
-✓ Bot setup complete
-✅ Bot is running!
-```
-
-## Usage
-
-### User Commands
-
-- `/start` - Initialize bot and see welcome message
-- `/gainers` - View top gainers (interactive filters)
-- `/alerts` - Enable/disable spike alerts
-- `/help` - Show help information
-
-### How It Works
-
-1. **Manual Queries**: 
-   - User sends `/gainers`
-   - Selects exchange (or "All")
-   - Selects top count (5/10/20)
-   - Bot fetches and displays results
-
-2. **Automatic Alerts**:
-   - Background task monitors all exchanges every 60s
-   - Detects spikes between 30-70%
-   - Sends push notifications to users with alerts enabled
-   - Prevents duplicate alerts within 1 hour
-
-## Database Schema
-
-### Users Table
-Stores user info and alert preferences
-
-### User Preferences Table
-Custom settings per user (exchanges, thresholds)
-
-### Price Snapshots Table
-Historical price data for trend analysis
-
-### Alert History Table
-Tracks sent alerts to prevent duplicates
-
-## Customization
-
-### Change Monitoring Interval
-
-Edit `.env`:
-```env
-SPIKE_CHECK_INTERVAL=30  # Check every 30 seconds
-```
-
-### Adjust Spike Thresholds
-
-Edit `.env`:
-```env
-MIN_SPIKE_THRESHOLD=20  # Lower bound
-MAX_SPIKE_THRESHOLD=100 # Upper bound
-```
-
-### Add More Exchanges
-
-CCXT supports 100+ exchanges. To add more:
-
-1. Check [CCXT Supported Exchanges](https://github.com/ccxt/ccxt#supported-cryptocurrency-exchange-markets)
-2. Add to `exchanges/client.py` in `SUPPORTED_EXCHANGES`
-3. Update `.env` EXCHANGES list
-
-## Deployment
-
-### Option 1: Railway
-
-```bash
-# Install Railway CLI
-npm i -g @railway/cli
-
-# Login and init
-railway login
-railway init
-railway up
-```
-
-### Option 2: Render
-
-1. Connect GitHub repo
-2. Set environment variables
-3. Deploy as Background Worker
-
-### Option 3: VPS
-
-```bash
-# Install supervisor
-sudo apt install supervisor
-
-# Create supervisor config
-sudo nano /etc/supervisor/conf.d/topgainers.conf
-
-# Add:
-[program:topgainers]
-directory=/path/to/bot
-command=/path/to/venv/bin/python main.py
-autostart=true
-autorestart=true
-```
-
-## Troubleshooting
-
-### Bot Not Responding
-- Check `TELEGRAM_BOT_TOKEN` is correct
-- Ensure bot is running (`python main.py`)
-- Check logs for errors
-
-### Database Connection Failed
-- Verify `DATABASE_URL` in `.env`
-- Run `prisma db push` again
-- Check Neon dashboard for connection issues
-
-### No Spike Alerts
-- Verify `SPIKE_CHECK_INTERVAL` is set
-- Check exchange connections in logs
-- Ensure users have alerts enabled
-
-### Exchange API Errors
-- CCXT rate limits may apply
-- Check exchange status pages
-- Wait and retry
-
-## Contributing
-
-Feel free to submit issues and enhancement requests!
-
-## License
-
-MIT License
-
-## Support
-
-Questions? Issues? Open a GitHub issue or contact [@yourusername]
 
 ---
 

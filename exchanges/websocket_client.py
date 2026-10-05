@@ -1,7 +1,7 @@
 import asyncio
 import json
 import websockets
-from typing import Dict, Set, Callable, Optional
+from typing import Dict
 from datetime import datetime
 
 class WebSocketClient:
@@ -20,11 +20,16 @@ class WebSocketClient:
     
     def __init__(self):
         self.connections: Dict[str, websockets.WebSocketClientProtocol] = {}
-        self.active_subscriptions: Dict[str, Set[str]] = {ex: set() for ex in self.ENDPOINTS}
+        # Insertion-ordered (dict keys) so the oldest subscription can be evicted
+        self.active_subscriptions: Dict[str, Dict[str, None]] = {ex: {} for ex in self.ENDPOINTS}
         self.order_book_cache: Dict[str, Dict] = {}  # { "symbol": { "bids": [], "asks": [], "timestamp": ... } }
         self.is_running = False
         self._lock = asyncio.Lock()
         self.last_ping: Dict[str, float] = {}
+        self._tasks: list = []
+        
+        # Order book data older than this is ignored (connection may be stuck)
+        self.MAX_BOOK_AGE_SECONDS = 30
         
         # Rate limiting
         self.MAX_SUBSCRIPTIONS = 10  # Max symbols per exchange
@@ -37,16 +42,27 @@ class WebSocketClient:
         
         # Start connection loops for supported exchanges
         for exchange in self.ENDPOINTS:
-            asyncio.create_task(self._maintain_connection(exchange))
+            self._tasks.append(asyncio.create_task(self._maintain_connection(exchange)))
             # Start ping loop for MEXC
             if exchange == "mexc":
-                asyncio.create_task(self._mexc_heartbeat())
+                self._tasks.append(asyncio.create_task(self._mexc_heartbeat()))
             
     async def stop(self):
         """Stop all connections"""
         self.is_running = False
-        for exchange, ws in self.connections.items():
-            await ws.close()
+        for ws in list(self.connections.values()):
+            try:
+                await ws.close()
+            except Exception:
+                pass
+        for task in self._tasks:
+            task.cancel()
+        await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks.clear()
+    
+    def supports(self, exchange: str) -> bool:
+        """Whether order book streaming is available for this exchange"""
+        return exchange.lower() in self.ENDPOINTS
             
     async def subscribe_order_book(self, exchange: str, symbol: str):
         """
@@ -68,10 +84,15 @@ class WebSocketClient:
             if len(self.active_subscriptions[exchange]) >= self.MAX_SUBSCRIPTIONS:
                 # Remove oldest subscription to make room
                 oldest = next(iter(self.active_subscriptions[exchange]))
-                self.active_subscriptions[exchange].remove(oldest)
-                cache_key = f"{exchange}:{oldest}"
-                if cache_key in self.order_book_cache:
-                    del self.order_book_cache[cache_key]
+                del self.active_subscriptions[exchange][oldest]
+                self.order_book_cache.pop(f"{exchange}:{oldest}", None)
+                try:
+                    if exchange == "binance" and self._is_connected("binance"):
+                        await self._unsubscribe_binance(oldest)
+                    elif exchange == "mexc" and self._is_connected("mexc"):
+                        await self._unsubscribe_mexc(oldest)
+                except Exception as e:
+                    print(f"⚠️ Failed to unsubscribe {oldest} on {exchange}: {e}")
                     
             # Rate limit: wait 0.5s between subscriptions
             last_time = self.last_subscribe_time.get(exchange, 0)
@@ -79,7 +100,7 @@ class WebSocketClient:
             if now - last_time < 0.5:
                 await asyncio.sleep(0.5 - (now - last_time))
             
-            self.active_subscriptions[exchange].add(symbol)
+            self.active_subscriptions[exchange][symbol] = None
             self.last_subscribe_time[exchange] = asyncio.get_event_loop().time()
             print(f"🎯 Sniper targeting: {symbol} on {exchange}")
             
@@ -92,27 +113,31 @@ class WebSocketClient:
             except Exception as e:
                 print(f"⚠️ Failed to subscribe {symbol} on {exchange}: {e}")
                 # Remove from active if subscription failed
-                self.active_subscriptions[exchange].discard(symbol)
+                self.active_subscriptions[exchange].pop(symbol, None)
                 
     async def unsubscribe_order_book(self, exchange: str, symbol: str):
         """Unsubscribe to free up resources"""
         exchange = exchange.lower()
         symbol = symbol.lower()
         
+        if exchange not in self.ENDPOINTS:
+            return
+        
         async with self._lock:
             if symbol in self.active_subscriptions[exchange]:
-                self.active_subscriptions[exchange].remove(symbol)
+                del self.active_subscriptions[exchange][symbol]
                 
                 # Cleanup cache
-                cache_key = f"{exchange}:{symbol}"
-                if cache_key in self.order_book_cache:
-                    del self.order_book_cache[cache_key]
+                self.order_book_cache.pop(f"{exchange}:{symbol}", None)
                 
                 # Send unsubscribe message
-                if exchange == "binance":
-                    await self._unsubscribe_binance(symbol)
-                elif exchange == "mexc":
-                    await self._unsubscribe_mexc(symbol)
+                try:
+                    if exchange == "binance" and self._is_connected("binance"):
+                        await self._unsubscribe_binance(symbol)
+                    elif exchange == "mexc" and self._is_connected("mexc"):
+                        await self._unsubscribe_mexc(symbol)
+                except Exception as e:
+                    print(f"⚠️ Failed to unsubscribe {symbol} on {exchange}: {e}")
                     
     async def get_order_book_imbalance(self, exchange: str, symbol: str) -> float:
         """
@@ -125,6 +150,10 @@ class WebSocketClient:
         
         if not data:
             return 50.0  # Neutral if no data
+        
+        age = (datetime.utcnow() - data['timestamp']).total_seconds()
+        if age > self.MAX_BOOK_AGE_SECONDS:
+            return 50.0  # Stale data - treat as neutral
             
         # Analyze top 20 levels
         try:
@@ -147,7 +176,7 @@ class WebSocketClient:
             return False
         try:
             return ws.open
-        except:
+        except Exception:
             return False
 
     # ================== INTERNAL METHODS ==================
@@ -162,7 +191,8 @@ class WebSocketClient:
                     print(f"✅ Connected to {exchange} WebSocket")
                     
                     # Resubscribe to any active symbols (in case of reconnection)
-                    for symbol in self.active_subscriptions[exchange]:
+                    # Copy: subscribe_order_book may modify the set meanwhile
+                    for symbol in list(self.active_subscriptions[exchange]):
                         if exchange == "binance":
                             await self._subscribe_binance(symbol)
                         elif exchange == "mexc":
@@ -175,7 +205,7 @@ class WebSocketClient:
                         except asyncio.TimeoutError:
                             # Send ping if needed
                             if exchange == "mexc":
-                                await ws.send(json.dumps({"method": "PING"}))
+                                await ws.send(json.dumps({"method": "ping"}))
                         
             except Exception as e:
                 print(f"⚠️ {exchange} WebSocket error: {e}")
@@ -189,7 +219,7 @@ class WebSocketClient:
                     ws = self.connections["mexc"]
                     # MEXC Futures ping format
                     await ws.send(json.dumps({"method": "ping"}))
-            except:
+            except Exception:
                 pass
             await asyncio.sleep(20)  # MEXC requires ping every 30s, send at 20s for safety
 

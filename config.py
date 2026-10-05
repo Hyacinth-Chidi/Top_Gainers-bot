@@ -19,7 +19,15 @@ class Config:
     MAX_SPIKE_THRESHOLD = float(os.getenv("MAX_SPIKE_THRESHOLD", 70))
     
     # Exchanges
-    EXCHANGES = os.getenv("EXCHANGES", "binance,bybit,mexc,bitget,gateio").split(",")
+    EXCHANGES = [
+        e.strip().lower()
+        for e in os.getenv("EXCHANGES", "binance,bybit,mexc,bitget,gateio").split(",")
+        if e.strip()
+    ]
+    
+    # How many days of alert history to keep (older alerts are deleted
+    # automatically; only the last 12h are needed for cooldowns)
+    ALERT_HISTORY_DAYS = max(1.0, float(os.getenv("ALERT_HISTORY_DAYS", 7)))
     
     # Bybit regional endpoint
     # Options: "bybit.com" (global), "bybit.us" (US), "bybit.eu" (EU)
@@ -36,8 +44,11 @@ class Config:
     ADMIN_USER_IDS = [int(uid.strip()) for uid in _admin_ids_str.split(",") if uid.strip()]
     
     # DEX Tracking (Solana)
+    # Birdeye requires an API key, so DEX tracking only runs when one is set
     DEX_ENABLED = os.getenv("DEX_ENABLED", "true").lower() == "true"
-    BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY", "")  # Optional, increases rate limits
+    BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY", "")
+    DEX_BIG_BUY_USD = float(os.getenv("DEX_BIG_BUY_USD", 5000))
+    DEX_WHALE_BUY_USD = float(os.getenv("DEX_WHALE_BUY_USD", 25000))
     
     @classmethod
     def validate(cls):

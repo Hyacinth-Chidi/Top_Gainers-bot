@@ -37,14 +37,15 @@ class BotKeyboards:
         return InlineKeyboardMarkup(keyboard)
     
     @staticmethod
-    def back_to_menu():
+    def back_to_menu(mode: str = "gainers"):
         """Keyboard with back to menu button"""
+        label = "🔄 View Losers Again" if mode == "losers" else "🔄 View Gainers Again"
         keyboard = [
             [
                 InlineKeyboardButton("🔙 Back to Menu", callback_data="menu:main"),
             ],
             [
-                InlineKeyboardButton("🔄 View Gainers Again", callback_data="menu:gainers"),
+                InlineKeyboardButton(label, callback_data=f"menu:{mode}"),
             ],
         ]
         return InlineKeyboardMarkup(keyboard)
@@ -111,6 +112,12 @@ class BotKeyboards:
                 InlineKeyboardButton(
                     get_text("📉 Daily Losers", "daily_dumps"), 
                     callback_data="toggle_alert:daily_dumps"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    get_text("🌐 DEX Alerts (Solana)", "dex_alerts"), 
+                    callback_data="toggle_alert:dex_alerts"
                 ),
             ],
             [
