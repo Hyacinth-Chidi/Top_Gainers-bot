@@ -68,15 +68,15 @@ def test_classify_priority():
 def test_daily_spike_not_repeated_hourly():
     tracker, bot, db = make_tracker()
     coin = {"symbol": "XUSDT", "exchange": "binance", "price": 1.0,
-            "change_24h": 40.0, "volume_24h": 1_000_000, "url": ""}
+            "change_24h": 40.0, "volume_24h": 5_000_000, "url": ""}
 
     asyncio.run(tracker._process_coin(coin))
     assert db.saved_alerts == [("XUSDT", "binance", "daily_spikes")]
 
     # Pretend 2 hours passed: the old code would alert again here
-    key = ("XUSDT:binance", "daily_spikes")
+    key = ("XUSDT", "daily_spikes")
     tracker.alerted_spikes[key] -= timedelta(hours=2)
-    tracker.last_alert_for_coin["XUSDT:binance"] -= timedelta(hours=2)
+    tracker.last_alert_for_coin["XUSDT"] -= timedelta(hours=2)
     asyncio.run(tracker._process_coin(coin))
     assert len(db.saved_alerts) == 1
 
@@ -94,7 +94,7 @@ def test_cleanup_drops_momentum_for_inactive_coins():
 
 def _coin(price, change_24h=10.0):
     return {"symbol": "XUSDT", "exchange": "binance", "price": price,
-            "change_24h": change_24h, "volume_24h": 1_000_000, "url": ""}
+            "change_24h": change_24h, "volume_24h": 5_000_000, "url": ""}
 
 
 def _seed_price(tracker, price, minutes_ago=6):
@@ -155,10 +155,10 @@ def test_scan_covers_coins_outside_daily_top_movers():
         async def get_all_tickers(self, exchange):
             # 200 coins with bigger daily moves crowd QUIET out of any top-N list
             coins = [{"symbol": f"BIG{i}USDT", "exchange": exchange, "price": 1.0,
-                      "change_24h": 20.0 if i % 2 else -20.0, "volume_24h": 1e6, "url": ""}
+                      "change_24h": 20.0 if i % 2 else -20.0, "volume_24h": 5e6, "url": ""}
                      for i in range(200)]
             coins.append({"symbol": "QUIETUSDT", "exchange": exchange, "price": self.price,
-                          "change_24h": 1.0, "volume_24h": 1e6, "url": ""})
+                          "change_24h": 1.0, "volume_24h": 5e6, "url": ""})
             return coins
         def _generate_trade_link(self, exchange, symbol):
             return ""

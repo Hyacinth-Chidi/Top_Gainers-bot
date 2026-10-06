@@ -1,5 +1,7 @@
 import asyncio
+from dataclasses import dataclass
 from datetime import datetime, timedelta
+from statistics import median
 from typing import Dict, List, Optional, Tuple
 from database.client import DatabaseClient
 from telegram import Bot
@@ -9,15 +11,52 @@ from exchanges.websocket_client import WebSocketClient
 from bot.messages import BotMessages
 from config import config
 from .broadcaster import AlertBroadcaster
+from .limiter import AlertLimiter
+
+
+@dataclass
+class Observation:
+    """One coin on one exchange in the current scan"""
+    symbol: str
+    exchange: str
+    price: float
+    change_24h: float
+    volume: float
+    move: Optional[float]  # % change over the last 5 minutes (None until we have 5 min of history)
+    url: str
 
 
 class SpikeTracker:
-    """Monitor exchanges for sudden price spikes/dumps and alert users"""
+    """
+    Monitor exchanges for sudden price spikes/dumps and alert users.
 
-    # Original thresholds (still used for quick detection)
+    Each scan works in two passes:
+      1. Record every coin's price on every exchange.
+      2. Measure how the whole market moved, then judge each coin ONCE across
+         all exchanges, by how much it beat the market.
+
+    This keeps alerts meaningful: thin, illiquid coins are ignored, a coin
+    moving on five exchanges is one alert, and a market-wide move is one
+    summary instead of hundreds of alerts.
+    """
+
+    # 5-minute pump/dump: move relative to the market
     MIN_VOLATILITY_THRESHOLD = 5.0  # 5% pump
     MIN_DUMP_THRESHOLD = -5.0       # -5% dump (negative value)
     VOLATILITY_WINDOW_MINUTES = 5   # In 5 minutes
+
+    # Only alert on coins people can actually trade: at least this much
+    # 24h volume (USD) on one exchange. Thinner coins swing 5% on a single
+    # order. Watchlist coins below this still alert, but only their watchers.
+    MIN_ALERT_VOLUME_USD = 3_000_000
+
+    # Market-wide moves: when the median liquid coin moves this much in
+    # 5 minutes, send one summary and judge coins relative to the market
+    MARKET_MOVE_THRESHOLD = 1.5
+    MARKET_MIN_COINS = 30           # Need this many liquid coins to measure the market
+    MARKET_BREADTH_MOVE = 1.0       # A coin "moved with the market" if it moved this much the same way
+    MARKET_ALERT_COOLDOWN = timedelta(minutes=30)
+    MAJORS = ("BTCUSDT", "ETHUSDT", "SOLUSDT")
 
     # Multi-Factor Scoring Thresholds
     VOLUME_SPIKE_MULTIPLIER = 3.0   # Recent trading pace must be 3x the 24h average to score
@@ -25,6 +64,7 @@ class SpikeTracker:
     MOMENTUM_CANDLES_REQUIRED = 3   # 3 consecutive gains = momentum
     MIN_PUMP_SCORE = 50             # Minimum score to trigger early pump alert
     HIGH_PUMP_SCORE = 70            # High confidence pump alert
+    EARLY_MIN_RELATIVE_MOVE = 1.5   # Early signals need the coin itself to be beating the market
 
     # Scoring weights
     SCORE_VOLUME_SPIKE = 30         # Points for volume spike
@@ -34,8 +74,8 @@ class SpikeTracker:
     SCORE_ORDER_BOOK = 20           # Points for high buy pressure (>65%)
     SCORE_ORDER_BOOK_STRONG = 35    # Points for very high buy pressure (>80%)
 
-    # Cooldowns per alert type. Daily alerts would otherwise repeat every
-    # hour for as long as a coin stays in the 30-70% band.
+    # Cooldowns per alert type, per coin (across all exchanges). Daily alerts
+    # would otherwise repeat while a coin stays in the 30-70% band.
     ALERT_COOLDOWNS = {
         "confirmed_pumps": timedelta(hours=1),
         "dumps": timedelta(hours=1),
@@ -54,13 +94,14 @@ class SpikeTracker:
     # any reason recently, so it doesn't repeat news the user already got
     DAILY_ALERT_GAP = timedelta(minutes=30)
 
-    def __init__(self, exchange_client: ExchangeClient, bot: Bot, db: DatabaseClient):
+    def __init__(self, exchange_client: ExchangeClient, bot: Bot, db: DatabaseClient,
+                 limiter: Optional[AlertLimiter] = None):
         self.exchange_client = exchange_client
         self.ws_client = WebSocketClient()  # Initialize Sniper WebSocket
         self.bot = bot
         self.db = db
         self.messages = BotMessages()
-        self.broadcaster = AlertBroadcaster(bot, db)
+        self.broadcaster = AlertBroadcaster(bot, db, limiter)
 
         # Cache previous prices for comparison
         # Format: { "symbol:exchange": [(price, timestamp), ...] }
@@ -74,17 +115,20 @@ class SpikeTracker:
         # Format: { "symbol:exchange": [change1, change2, change3, ...] }
         self.momentum_history: Dict[str, List[float]] = {}
 
-        # Last alert time per (coin, alert type)
+        # Last alert time per (symbol, alert type) - per coin, across exchanges
         self.alerted_spikes: Dict[Tuple[str, str], datetime] = {}
 
-        # Price at the last alert per (coin, alert type), to detect escalation
+        # Price at the last alert per (symbol, alert type), to detect escalation
         self.alert_prices: Dict[Tuple[str, str], float] = {}
 
-        # Last alert time per coin, any type
+        # Last alert time per symbol, any type
         self.last_alert_for_coin: Dict[str, datetime] = {}
 
-        # Track early pump alerts separately (different cooldown)
+        # Early pump alerts per symbol (different cooldown)
         self.alerted_early_pumps: Dict[str, datetime] = {}
+
+        # Last market-wide summary per direction ("up" / "down")
+        self.market_alerted: Dict[str, datetime] = {}
 
         # Track WebSocket subscriptions (for Sniper Mode cleanup)
         # Format: { "symbol:exchange": timestamp_added }
@@ -114,99 +158,196 @@ class SpikeTracker:
         await self.ws_client.stop()
         print("🛑 Spike tracker stopped")
 
+    # ==================== SCAN ====================
+
     async def _check_all_exchanges(self):
-        """Check all exchanges for spikes"""
+        """One scan: record every coin, then decide on alerts once per coin"""
         # Load recipients once per cycle rather than once per alert
         await self.broadcaster.refresh()
 
-        # Fetch all exchanges concurrently; process sequentially
         results = await asyncio.gather(
             *(self.exchange_client.get_all_tickers(name) for name in config.EXCHANGES),
             return_exceptions=True
         )
 
+        # Pass 1: record every active pair (not just today's top movers - a
+        # coin flat on the day that suddenly moves is what alerts are for)
+        now = datetime.utcnow()
+        groups: Dict[str, List[Observation]] = {}
         for exchange_name, coins in zip(config.EXCHANGES, results):
             if isinstance(coins, Exception):
                 print(f"Error checking {exchange_name}: {coins}")
                 continue
-            # Every active pair is checked, not just today's top movers: a coin
-            # that is flat on the day and suddenly pumps or dumps is exactly
-            # what the 5-minute alerts exist for.
             for coin in coins:
                 try:
-                    await self._process_coin(coin)
+                    obs = self._observe(coin, now)
                 except Exception as e:
                     print(f"Error processing {coin.get('symbol')} on {exchange_name}: {e}")
+                    continue
+                groups.setdefault(obs.symbol, []).append(obs)
             # Let Telegram commands run between exchanges
             await asyncio.sleep(0)
 
+        # Pass 2: measure the market, then judge each coin once
+        market_move, moved, total = self._measure_market(groups)
+        await self._maybe_send_market_alert(groups, market_move, moved, total, now)
+
+        for symbol, observations in groups.items():
+            try:
+                await self._evaluate_symbol(symbol, observations, market_move, now)
+            except Exception as e:
+                print(f"Error evaluating {symbol}: {e}")
+
+        # Summaries for users who hit their hourly cap
+        await self.broadcaster.flush_digests()
+
     async def _process_coin(self, coin: Dict):
-        """Update history for one coin and send any alerts it triggers"""
+        """Record and judge a single coin on its own (no market context)"""
+        now = datetime.utcnow()
+        obs = self._observe(coin, now)
+        await self._evaluate_symbol(obs.symbol, [obs], 0.0, now)
+
+    def _observe(self, coin: Dict, now: datetime) -> Observation:
+        """Record one coin's latest price and volume"""
         symbol = coin['symbol']
         exchange = coin['exchange']
         price = coin['price']
-        change_24h = coin['change_24h']
         volume = coin['volume_24h']
-
         cache_key = f"{symbol}:{exchange}"
-        now = datetime.utcnow()
 
         self._record_history(cache_key, price, volume, now)
+        sample = self._sample_from_window_ago(self.price_history.get(cache_key, []), now)
+        move = ((price - sample[0]) / sample[0]) * 100 if sample and sample[0] > 0 else None
 
-        volatility_change = self._get_volatility_change(cache_key, price, now)
+        return Observation(
+            symbol=symbol, exchange=exchange, price=price,
+            change_24h=coin['change_24h'], volume=volume, move=move,
+            url=coin.get('url', ''),
+        )
+
+    @staticmethod
+    def _representative(observations: List[Observation]) -> Observation:
+        """The coin's busiest exchange: its numbers are used for decisions"""
+        return max(observations, key=lambda o: o.volume or 0)
+
+    # ==================== MARKET-WIDE MOVES ====================
+
+    def _measure_market(self, groups: Dict[str, List[Observation]]) -> Tuple[float, int, int]:
+        """
+        Median 5-minute move of liquid coins (0 if there aren't enough), plus
+        how many of them moved the same way and how many were measured.
+        """
+        moves = []
+        for observations in groups.values():
+            rep = self._representative(observations)
+            if rep.move is not None and rep.volume >= self.MIN_ALERT_VOLUME_USD:
+                moves.append(rep.move)
+        if len(moves) < self.MARKET_MIN_COINS:
+            return 0.0, 0, len(moves)
+
+        market = median(moves)
+        if market >= 0:
+            moved = sum(1 for m in moves if m >= self.MARKET_BREADTH_MOVE)
+        else:
+            moved = sum(1 for m in moves if m <= -self.MARKET_BREADTH_MOVE)
+        return market, moved, len(moves)
+
+    async def _maybe_send_market_alert(self, groups: Dict[str, List[Observation]], market_move: float,
+                                       moved: int, total: int, now: datetime):
+        """One summary message when the whole market moves together"""
+        if abs(market_move) < self.MARKET_MOVE_THRESHOLD:
+            return
+        direction = "up" if market_move > 0 else "down"
+        last = self.market_alerted.get(direction)
+        if last and now - last < self.MARKET_ALERT_COOLDOWN:
+            return
+
+        reps = {
+            symbol: self._representative(obs) for symbol, obs in groups.items()
+        }
+        majors = [(s, reps[s].move) for s in self.MAJORS if s in reps and reps[s].move is not None]
+        liquid = [
+            (s, r.move) for s, r in reps.items()
+            if r.move is not None and r.volume >= self.MIN_ALERT_VOLUME_USD
+        ]
+        liquid.sort(key=lambda x: x[1], reverse=market_move > 0)
+        leaders = liquid[:5]
+
+        message = self.messages.format_market_move(market_move, moved, total, majors, leaders)
+        print(f"🌍 MARKET {direction.upper()}: median {market_move:+.2f}% in 5m ({moved}/{total} coins)")
+        await self.broadcaster.broadcast(message, "market_moves", priority=True)
+        self.market_alerted[direction] = now
+
+    # ==================== PER-COIN DECISIONS ====================
+
+    async def _evaluate_symbol(self, symbol: str, observations: List[Observation],
+                               market_move: float, now: datetime):
+        """Decide on alerts for one coin, looking at all its exchanges at once"""
+        rep = self._representative(observations)
+        liquid = rep.volume >= self.MIN_ALERT_VOLUME_USD
+        watchers_only = not liquid
+        if watchers_only and not self.broadcaster.watchers_of(symbol):
+            return  # Too thin to trade and nobody is watching it
+
+        relative = rep.move - market_move if rep.move is not None else None
+        venues = [(o.exchange, o.url) for o in sorted(observations, key=lambda o: -(o.volume or 0))]
+        exchanges = [o.exchange for o in observations]
 
         # ===== EARLY PUMP DETECTION =====
-        pump_score = await self._calculate_pump_score(
-            cache_key, volume, change_24h, volatility_change
-        )
-        # Only rising coins can be early pumps - volume and order book
-        # signals alone also light up during sell-offs
-        if pump_score >= self.MIN_PUMP_SCORE and volatility_change > 0:
-            if self._should_alert_early_pump(cache_key, now):
+        if relative is not None and relative >= self.EARLY_MIN_RELATIVE_MOVE:
+            pump_score = await self._calculate_pump_score(
+                f"{symbol}:{rep.exchange}", rep.volume, rep.change_24h, relative
+            )
+            if pump_score >= self.MIN_PUMP_SCORE and self._should_alert_early_pump(symbol, now):
                 await self._send_early_pump_alert(
-                    symbol, exchange, price, change_24h, volume, pump_score
+                    rep, pump_score, venues, exchanges, market_move, watchers_only
                 )
-                self.alerted_early_pumps[cache_key] = now
+                self.alerted_early_pumps[symbol] = now
 
         # ===== THRESHOLD ALERTS =====
-        alert_type = self._classify_move(volatility_change, change_24h)
-        if alert_type and await self._should_alert(cache_key, symbol, exchange, alert_type, price, now):
-            if alert_type == "confirmed_pumps":
-                message = self.messages.format_pump_alert(
-                    symbol, exchange, price, volatility_change, volume, coin.get('url', ''),
-                    change_24h=change_24h
-                )
-                print(f"🚀 PUMP: {symbol} on {exchange} (+{volatility_change:.2f}% in 5m)")
-            elif alert_type == "dumps":
-                message = self.messages.format_dump_alert(
-                    symbol, exchange, price, volatility_change, volume, coin.get('url', ''),
-                    change_24h=change_24h
-                )
-                print(f"💥 DUMP: {symbol} on {exchange} ({volatility_change:.2f}% in 5m)")
-            elif alert_type == "daily_spikes":
-                message = self.messages.format_spike_alert(
-                    symbol, exchange, price, change_24h, volume, coin.get('url', '')
-                )
-                print(f"🔥 DAILY SPIKE: {symbol} on {exchange} (+{change_24h:.2f}%)")
-            else:
-                message = self.messages.format_daily_dump_alert(
-                    symbol, exchange, price, change_24h, volume, coin.get('url', '')
-                )
-                print(f"📉 DAILY DUMP: {symbol} on {exchange} ({change_24h:.2f}%)")
+        alert_type = self._classify_move(relative or 0.0, rep.change_24h)
+        if not alert_type or not await self._should_alert(symbol, alert_type, rep.price, now):
+            return
 
-            await self.broadcaster.broadcast(message, alert_type, exchange=exchange, symbol=symbol)
+        args = dict(venues=venues)
+        if alert_type == "confirmed_pumps":
+            message = self.messages.format_pump_alert(
+                symbol, rep.exchange, rep.price, rep.move, rep.volume, rep.url,
+                change_24h=rep.change_24h, market_move=market_move, **args
+            )
+            print(f"🚀 PUMP: {symbol} ({rep.move:+.2f}% in 5m, {relative:+.2f}% vs market)")
+        elif alert_type == "dumps":
+            message = self.messages.format_dump_alert(
+                symbol, rep.exchange, rep.price, rep.move, rep.volume, rep.url,
+                change_24h=rep.change_24h, market_move=market_move, **args
+            )
+            print(f"💥 DUMP: {symbol} ({rep.move:+.2f}% in 5m, {relative:+.2f}% vs market)")
+        elif alert_type == "daily_spikes":
+            message = self.messages.format_spike_alert(
+                symbol, rep.exchange, rep.price, rep.change_24h, rep.volume, rep.url, **args
+            )
+            print(f"🔥 DAILY SPIKE: {symbol} ({rep.change_24h:+.2f}%)")
+        else:
+            message = self.messages.format_daily_dump_alert(
+                symbol, rep.exchange, rep.price, rep.change_24h, rep.volume, rep.url, **args
+            )
+            print(f"📉 DAILY DUMP: {symbol} ({rep.change_24h:+.2f}%)")
 
-            self.alerted_spikes[(cache_key, alert_type)] = now
-            self.alert_prices[(cache_key, alert_type)] = price
-            self.last_alert_for_coin[cache_key] = now
-            change = volatility_change if alert_type in ("confirmed_pumps", "dumps") else change_24h
-            await self.db.save_alert(symbol, exchange, change, alert_type=alert_type)
+        await self.broadcaster.broadcast(
+            message, alert_type, exchange=exchanges, symbol=symbol, watchers_only=watchers_only
+        )
 
-    def _classify_move(self, volatility_change: float, change_24h: float) -> Optional[str]:
+        self.alerted_spikes[(symbol, alert_type)] = now
+        self.alert_prices[(symbol, alert_type)] = rep.price
+        self.last_alert_for_coin[symbol] = now
+        change = rep.move if alert_type in self.FAST_ALERT_TYPES else rep.change_24h
+        await self.db.save_alert(symbol, rep.exchange, change, alert_type=alert_type)
+
+    def _classify_move(self, relative_move: float, change_24h: float) -> Optional[str]:
         """Return the highest-priority alert type this move qualifies for"""
-        if volatility_change >= self.MIN_VOLATILITY_THRESHOLD:
+        if relative_move >= self.MIN_VOLATILITY_THRESHOLD:
             return "confirmed_pumps"
-        if volatility_change <= self.MIN_DUMP_THRESHOLD:
+        if relative_move <= self.MIN_DUMP_THRESHOLD:
             return "dumps"
         if config.MIN_SPIKE_THRESHOLD <= change_24h <= config.MAX_SPIKE_THRESHOLD:
             return "daily_spikes"
@@ -354,18 +495,20 @@ class SpikeTracker:
 
         return 0
 
-    def _should_alert_early_pump(self, cache_key: str, now: datetime) -> bool:
-        """Check if we should send early pump alert (30 min cooldown)"""
-        last_alert = self.alerted_early_pumps.get(cache_key)
-        return last_alert is None or now - last_alert >= self.EARLY_PUMP_COOLDOWN
+    def _should_alert_early_pump(self, symbol: str, now: datetime) -> bool:
+        """30 min cooldown, and no 'early' signal once a pump was already confirmed"""
+        last_alert = self.alerted_early_pumps.get(symbol)
+        if last_alert and now - last_alert < self.EARLY_PUMP_COOLDOWN:
+            return False
+        confirmed = self.alerted_spikes.get((symbol, "confirmed_pumps"))
+        return not (confirmed and now - confirmed < self.EARLY_PUMP_COOLDOWN)
 
-    async def _should_alert(self, cache_key: str, symbol: str, exchange: str,
-                            alert_type: str, price: float, now: datetime) -> bool:
-        """Determine if we should send an alert of this type for this coin"""
-        key = (cache_key, alert_type)
+    async def _should_alert(self, symbol: str, alert_type: str, price: float, now: datetime) -> bool:
+        """Determine if we should send an alert of this type for this coin (any exchange)"""
+        key = (symbol, alert_type)
 
         if alert_type not in self.FAST_ALERT_TYPES:
-            last_any = self.last_alert_for_coin.get(cache_key)
+            last_any = self.last_alert_for_coin.get(symbol)
             if last_any and now - last_any < self.DAILY_ALERT_GAP:
                 return False
 
@@ -377,7 +520,7 @@ class SpikeTracker:
 
         # Database check covers alerts sent before a restart
         if not last and await self.db.has_recent_alert(
-            symbol, exchange, hours=cooldown.total_seconds() / 3600, alert_type=alert_type
+            symbol, None, hours=cooldown.total_seconds() / 3600, alert_type=alert_type
         ):
             # Remember it so we don't query again every cycle
             self.alerted_spikes[key] = now
@@ -427,6 +570,10 @@ class SpikeTracker:
             k: v for k, v in self.alert_prices.items() if k in self.alerted_spikes
         }
 
+        self.market_alerted = {
+            k: v for k, v in self.market_alerted.items() if now - v < self.MARKET_ALERT_COOLDOWN
+        }
+
         gap_cutoff = now - self.DAILY_ALERT_GAP
         self.last_alert_for_coin = {
             k: v for k, v in self.last_alert_for_coin.items() if v > gap_cutoff
@@ -440,25 +587,20 @@ class SpikeTracker:
                 asyncio.create_task(self.ws_client.unsubscribe_order_book(exchange, symbol))
                 del self.active_subscriptions[key]
 
-    async def _send_early_pump_alert(
-        self,
-        symbol: str,
-        exchange: str,
-        price: float,
-        change_24h: float,
-        volume: float,
-        pump_score: int
-    ):
+    async def _send_early_pump_alert(self, rep: Observation, pump_score: int,
+                                     venues: List[Tuple[str, str]], exchanges: List[str],
+                                     market_move: float, watchers_only: bool):
         """Send early pump detection alert to subscribed users"""
         if not self.broadcaster.has_recipients():
             return
 
-        url = self.exchange_client._generate_trade_link(exchange, symbol)
         confidence = "HIGH" if pump_score >= self.HIGH_PUMP_SCORE else "MEDIUM"
-
         message = self.messages.format_early_pump_alert(
-            symbol, exchange, price, change_24h, volume, pump_score, confidence, url
+            rep.symbol, rep.exchange, rep.price, rep.change_24h, rep.volume, pump_score,
+            confidence, rep.url, venues=venues, change_5m=rep.move, market_move=market_move
         )
-        print(f"🔮 EARLY PUMP ({confidence}, {pump_score}): {symbol} on {exchange}")
+        print(f"🔮 EARLY PUMP ({confidence}, {pump_score}): {rep.symbol}")
 
-        await self.broadcaster.broadcast(message, "early_pumps", exchange=exchange, symbol=symbol)
+        await self.broadcaster.broadcast(
+            message, "early_pumps", exchange=exchanges, symbol=rep.symbol, watchers_only=watchers_only
+        )

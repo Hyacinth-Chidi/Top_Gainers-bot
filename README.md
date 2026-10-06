@@ -17,20 +17,32 @@ A Telegram bot that tracks USDT perpetual futures across major crypto exchanges,
 
 The bot scans every exchange every `SPIKE_CHECK_INTERVAL` seconds (60 by default) and checks **every** active USDT perpetual, not just the day's top movers, so a coin that is flat on the day and suddenly moves is still caught. It keeps a short price history in memory.
 
+Each scan, it first measures how the **whole market** moved, then judges each coin **once across all exchanges**, by how much it beat the market.
+
 | Alert | Trigger | Repeats |
 |---|---|---|
-| 🔮 Early pump | Pump score ≥ 50 while the price is rising (≥ 70 = high confidence) | At most every 30 min per coin |
-| 🚀 Pump | +5% within 5 minutes | Every 1h per coin, or sooner if it climbs another 5% past the last alert |
-| 💥 Dump | −5% within 5 minutes | Every 1h per coin, or sooner if it falls another 5% past the last alert |
+| 🔮 Early pump | Pump score ≥ 50 while the coin beats the market by 1.5%+ (≥ 70 = high confidence) | At most every 30 min per coin; not after a pump was confirmed |
+| 🚀 Pump | 5%+ more than the market within 5 minutes | Every 1h per coin, or sooner if it climbs another 5% past the last alert |
+| 💥 Dump | 5%+ less than the market within 5 minutes | Every 1h per coin, or sooner if it falls another 5% past the last alert |
 | 🔥 Daily gainer | +30% to +70% over 24h | At most every 12h per coin |
 | 📉 Daily loser | −30% to −70% over 24h (off by default) | At most every 12h per coin |
+| 🟢🔴 Market-wide move | The median coin moves 1.5%+ in 5 minutes | At most every 30 min per direction |
 | 🌐 DEX big buy | Single Solana buy ≥ $5k (🐋 ≥ $25k) | Once per transaction |
 | 🌐 DEX demand | ≥ 10 buyers and twice as many buyers as sellers | At most every 2h per token |
 
+**Keeping alerts useful, not flooding**
+- **Tradeable coins only**: a coin needs $3M+ of 24h volume on at least one exchange. Thinner coins swing 5% on a single order. Watchlist coins below that still alert, but only for the people watching them.
+- **One alert per coin**: a coin moving on several exchanges is one alert, with a link for each exchange. Users get it if they follow any of those exchanges.
+- **Market-wide moves are one message**: when Bitcoin drags the whole market up or down, users get one summary with the biggest movers, instead of an alert for every coin. Individual alerts are only for coins that clearly beat the market.
+- **Hourly cap**: each user gets at most 10 pump/dump/early alerts and 3 daily gainer/loser alerts per hour. Anything beyond that arrives as one summary message 15 minutes later. Watchlist alerts and market-wide summaries always go straight through.
+
+**Other rules**
 - **Pump and dump alerts are never held back** by other alerts for the same coin, because timing matters. A daily alert is skipped if the coin was alerted for any reason in the last 30 minutes.
 - **Order book "Sniper Mode"**: when a coin scores 20–49 and is moving right now, the bot subscribes to its live order book (Binance and MEXC) so buy pressure counts toward the next score.
 - **Delivery**: alerts are sent in parallel batches of 25 per second, just under Telegram's limit. People who have the coin on their watchlist get it first.
 - **Alerts are off by default.** Users switch them on with `/alerts`. Users who block the bot have their alerts switched off automatically.
+
+The thresholds are constants at the top of `monitoring/tracker.py` and `monitoring/limiter.py`.
 
 ## Tech Stack
 
