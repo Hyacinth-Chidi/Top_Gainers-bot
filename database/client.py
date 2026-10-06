@@ -12,6 +12,7 @@ DEFAULT_ALERT_TYPES = {
     "daily_spikes": True,     # 🔥 Daily gainers (+30-70%)
     "daily_dumps": False,     # 📉 Daily losers (off by default)
     "dex_alerts": True,       # 🌐 Solana DEX big buys / demand
+    "market_moves": True,     # 🟢🔴 One summary when the whole market moves
 }
 
 ALL_EXCHANGES = ["binance", "bybit", "mexc", "bitget", "gateio"]
@@ -252,15 +253,16 @@ class DatabaseClient:
             {"_id": "alerts_sent"}, {"$inc": {"count": 1}}, upsert=True
         )
     
-    async def has_recent_alert(self, symbol: str, exchange: str, hours: float = 1,
+    async def has_recent_alert(self, symbol: str, exchange: Optional[str] = None, hours: float = 1,
                                alert_type: Optional[str] = None) -> bool:
-        """Check whether a symbol/exchange pair (optionally of one alert type) was alerted recently"""
+        """Was this symbol alerted recently (on one exchange, or any if exchange is None)?"""
         cutoff = datetime.utcnow() - timedelta(hours=hours)
         query = {
             "symbol": symbol,
-            "exchange": exchange,
             "alerted_at": {"$gte": cutoff}
         }
+        if exchange:
+            query["exchange"] = exchange
         if alert_type:
             query["alert_type"] = alert_type
         return await self.alert_history.find_one(query, {"_id": 1}) is not None

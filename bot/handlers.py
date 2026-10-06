@@ -394,6 +394,7 @@ class BotHandlers:
             "daily_spikes": "🔥 Daily Gainers",
             "daily_dumps": "📉 Daily Losers",
             "dex_alerts": "🌐 DEX Alerts (Solana)",
+            "market_moves": "🌍 Market-wide moves",
         }
         if alert_type not in type_names:
             await query.answer()

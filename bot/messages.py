@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 
 from config import config
 from .utils import md_bold, escape_md, format_price, format_volume
@@ -32,6 +32,26 @@ def exchange_name(exchange: str) -> str:
 def _pct(value: float) -> str:
     """+6.12% / −3.40% (proper minus sign)"""
     return f"+{value:.2f}%" if value >= 0 else f"−{abs(value):.2f}%"
+
+
+Venues = Optional[List[Tuple[str, str]]]  # [(exchange, trade_url), ...]
+
+
+def _venue_label(exchange: str, venues: Venues) -> str:
+    """'Binance', 'Binance and Bybit', 'Binance, Bybit and MEXC', 'Binance, Bybit +3 more'"""
+    names = [exchange_name(e) for e, _ in venues] if venues else [exchange_name(exchange)]
+    if len(names) == 1:
+        return names[0]
+    if len(names) <= 3:
+        return ", ".join(names[:-1]) + " and " + names[-1]
+    return f"{names[0]}, {names[1]} +{len(names) - 2} more"
+
+
+def _market_line(move: Optional[float], market_move: Optional[float]) -> str:
+    """Context when the whole market moved: how much the coin beat it by"""
+    if move is None or market_move is None or abs(market_move) < 1.0:
+        return ""
+    return f"📊 Market {_pct(market_move)} in 5 min · this coin {_pct(move - market_move)} vs market"
 
 
 class BotMessages:
@@ -71,15 +91,18 @@ class BotMessages:
         "*Alerts*\n"
         "/alerts - turn alerts on or off and choose what you get\n"
         "🔮 Early pump - signs a pump may be starting\n"
-        "🚀 Pump / 💥 Dump - a move of 5% or more within 5 minutes\n"
+        "🚀 Pump / 💥 Dump - a coin moves 5%+ more than the market within 5 minutes\n"
         f"🔥 Daily gainer / 📉 Daily loser - {_MIN}% to {_MAX}% up or down today\n"
+        "🟢 Market-wide move - one summary when the whole market moves together\n"
         + ("🌐 DEX - big and whale buys on Solana\n" if _DEX_ON else "")
         + "\n*Watchlist*\n"
         "/watchlist - see your coins\n"
         "`/watchlist add BTC` - add a coin\n"
         "`/watchlist remove BTC` - remove a coin\n"
         "⭐ Alerts for your coins are starred and reach you from every exchange.\n\n"
-        "Every alert has a link that opens the coin on the exchange.\n\n"
+        "Every alert has a link that opens the coin on the exchange.\n"
+        "To keep things calm, you get at most 10 urgent alerts an hour; "
+        "extras arrive together in one summary.\n\n"
         f"{DISCLAIMER}"
     )
 
@@ -127,8 +150,9 @@ class BotMessages:
 
     @staticmethod
     def _alert(headline: str, subtitle: str, price: float, change_24h: Optional[float],
-               volume: float, exchange: str, url: str, extra: str = "") -> str:
-        """Common layout: headline, subtitle, key numbers, link, disclaimer"""
+               volume: float, exchange: str, url: str, extra: str = "",
+               venues: Venues = None) -> str:
+        """Common layout: headline, subtitle, key numbers, link(s), disclaimer"""
         stats = f"💰 {format_price(price)}"
         if change_24h is not None:
             stats += f"  ·  24h {_pct(change_24h)}"
@@ -137,65 +161,118 @@ class BotMessages:
         message = f"{headline}\n_{subtitle}_\n\n{stats}\n"
         if extra:
             message += f"{extra}\n"
-        if url:
-            message += f"\n🔗 [Open on {exchange_name(exchange)}]({url})\n"
+        links = [(e, u) for e, u in (venues or []) if u]
+        if len(links) > 1:
+            message += "\n🔗 " + " · ".join(f"[{exchange_name(e)}]({u})" for e, u in links) + "\n"
+        elif links or url:
+            e, u = links[0] if links else (exchange, url)
+            message += f"\n🔗 [Open on {exchange_name(e)}]({u})\n"
         message += f"\n{DISCLAIMER}"
         return message
 
     @staticmethod
     def format_pump_alert(symbol: str, exchange: str, price: float, change_5m: float,
-                          volume: float, url: str = "", change_24h: Optional[float] = None) -> str:
+                          volume: float, url: str = "", change_24h: Optional[float] = None,
+                          venues: Venues = None, market_move: Optional[float] = None) -> str:
         """5-minute pump"""
         return BotMessages._alert(
             f"🚀 {md_bold(symbol)} {_pct(change_5m)} in 5 min",
-            f"Pump on {exchange_name(exchange)}",
+            f"Pump on {_venue_label(exchange, venues)}",
             price, change_24h, volume, exchange, url,
+            extra=_market_line(change_5m, market_move), venues=venues,
         )
 
     @staticmethod
     def format_dump_alert(symbol: str, exchange: str, price: float, change_5m: float,
-                          volume: float, url: str = "", change_24h: Optional[float] = None) -> str:
+                          volume: float, url: str = "", change_24h: Optional[float] = None,
+                          venues: Venues = None, market_move: Optional[float] = None) -> str:
         """5-minute dump"""
         return BotMessages._alert(
             f"💥 {md_bold(symbol)} {_pct(change_5m)} in 5 min",
-            f"Dump on {exchange_name(exchange)}",
+            f"Dump on {_venue_label(exchange, venues)}",
             price, change_24h, volume, exchange, url,
+            extra=_market_line(change_5m, market_move), venues=venues,
         )
 
     @staticmethod
     def format_spike_alert(symbol: str, exchange: str, price: float, change: float,
-                           volume: float, url: str = "") -> str:
+                           volume: float, url: str = "", venues: Venues = None) -> str:
         """Daily gainer"""
         return BotMessages._alert(
             f"🔥 {md_bold(symbol)} is up {_pct(change)} today",
-            f"Daily gainer on {exchange_name(exchange)}",
-            price, None, volume, exchange, url,
+            f"Daily gainer on {_venue_label(exchange, venues)}",
+            price, None, volume, exchange, url, venues=venues,
         )
 
     @staticmethod
     def format_daily_dump_alert(symbol: str, exchange: str, price: float, change_24h: float,
-                                volume: float, url: str = "") -> str:
+                                volume: float, url: str = "", venues: Venues = None) -> str:
         """Daily loser"""
         return BotMessages._alert(
             f"📉 {md_bold(symbol)} is down {_pct(change_24h)} today",
-            f"Daily loser on {exchange_name(exchange)}",
-            price, None, volume, exchange, url,
+            f"Daily loser on {_venue_label(exchange, venues)}",
+            price, None, volume, exchange, url, venues=venues,
         )
 
     @staticmethod
     def format_early_pump_alert(symbol: str, exchange: str, price: float, change_24h: float,
-                                volume: float, pump_score: int, confidence: str, url: str = "") -> str:
+                                volume: float, pump_score: int, confidence: str, url: str = "",
+                                venues: Venues = None, change_5m: Optional[float] = None,
+                                market_move: Optional[float] = None) -> str:
         """Score-based early pump signal"""
         if confidence == "HIGH":
             headline = f"🚨 {md_bold(symbol)} looks ready to pump"
         else:
             headline = f"🔮 {md_bold(symbol)} may be starting to pump"
+        extra = f"📊 Signal strength: *{pump_score}/100* ({confidence.lower()})"
+        market = _market_line(change_5m, market_move)
+        if market:
+            extra += "\n" + market
         return BotMessages._alert(
             headline,
-            f"Early signal on {exchange_name(exchange)}",
+            f"Early signal on {_venue_label(exchange, venues)}",
             price, change_24h, volume, exchange, url,
-            extra=f"📊 Signal strength: *{pump_score}/100* ({confidence.lower()})",
+            extra=extra, venues=venues,
         )
+
+    @staticmethod
+    def format_market_move(median_move: float, moved: int, total: int,
+                           majors: List[Tuple[str, float]], leaders: List[Tuple[str, float]]) -> str:
+        """One summary instead of hundreds of alerts when the whole market moves"""
+        up = median_move > 0
+        icon, word = ("🟢", "pump") if up else ("🔴", "drop")
+        lines = [
+            f"{icon} Market-wide {word}: most coins {_pct(median_move)} in 5 min",
+            f"_{moved} of {total} coins moved together_",
+            "",
+        ]
+        if majors:
+            lines.append("  ·  ".join(f"{md_bold(sym.replace('USDT', ''))} {_pct(m)}" for sym, m in majors))
+            lines.append("")
+        if leaders:
+            lines.append("*Moving the most*")
+            lines += [f"{i}. {md_bold(sym)} {_pct(m)}" for i, (sym, m) in enumerate(leaders, 1)]
+            lines.append("")
+        lines.append("Coins just following the market won't get separate alerts. "
+                     "You'll still hear about any coin that moves well beyond it.")
+        lines.append("")
+        lines.append(DISCLAIMER)
+        return "\n".join(lines)
+
+    @staticmethod
+    def format_digest(headlines: List[str], max_lines: int = 15) -> str:
+        """Alerts held back by the hourly cap, in one message"""
+        shown = headlines[:max_lines]
+        lines = [
+            f"🗂 *{len(headlines)} more alert{'s' if len(headlines) != 1 else ''} in the last few minutes*",
+            "_You've had a lot of alerts this hour, so here are the rest in one message._",
+            "",
+        ]
+        lines += [f"• {h}" for h in shown]
+        if len(headlines) > len(shown):
+            lines.append(f"• ...and {len(headlines) - len(shown)} more")
+        lines += ["", "Want fewer alerts? Choose alert types and exchanges in /alerts."]
+        return "\n".join(lines)
 
     # ==================== ALERT SETTINGS ====================
 

@@ -118,6 +118,12 @@ class BotKeyboards:
                 ),
             ],
             [
+                InlineKeyboardButton(
+                    get_text("🌍 Market-wide moves", "market_moves"), 
+                    callback_data="toggle_alert:market_moves"
+                ),
+            ],
+            [
                 InlineKeyboardButton("✅ Done", callback_data="menu:alerts"),
             ],
         ]
